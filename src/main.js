@@ -125,6 +125,166 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 document.body.appendChild(renderer.domElement);
 
+const textureLoader = new THREE.TextureLoader();
+
+/** Many textured quads — keep sampling cost predictable. */
+const GALLERY_TEX_MAX_ANISOTROPY = 1;
+
+/** Dense strip of photo slots — tight spacing, many faces per step, large prints. */
+const GALLERY_DENSE_Z_START = -0.28;
+const GALLERY_RING_STEP = 5.25;
+const GALLERY_DENSE_Z_EXTENT_FR = 0.94;
+/** ~8 panels × rings; cap keeps frame time bounded; photos still cycle. */
+const GALLERY_MAX_PANELS = 960;
+
+/**
+ * Gallery JPEGs (max ~576px long edge, ~68% JPEG) — width/height match files in /public/gallery
+ * for plane aspect; order follows tunnel encounter (see sorted layout specs).
+ */
+const GALLERY_ITEMS = [
+  { url: '/gallery/01.jpg', width: 432, height: 576 },
+  { url: '/gallery/02.jpg', width: 432, height: 576 },
+  { url: '/gallery/03.jpg', width: 576, height: 432 },
+  { url: '/gallery/04.jpg', width: 432, height: 576 },
+  { url: '/gallery/05.jpg', width: 381, height: 576 },
+  { url: '/gallery/06.jpg', width: 576, height: 381 },
+  { url: '/gallery/07.jpg', width: 381, height: 576 },
+  { url: '/gallery/08.jpg', width: 576, height: 381 },
+  { url: '/gallery/09.jpg', width: 432, height: 576 },
+  { url: '/gallery/10.jpg', width: 324, height: 576 },
+  { url: '/gallery/11.jpg', width: 432, height: 576 },
+  { url: '/gallery/12.jpg', width: 432, height: 576 },
+  { url: '/gallery/13.jpg', width: 432, height: 576 },
+  { url: '/gallery/14.jpg', width: 576, height: 508 },
+  { url: '/gallery/15.jpg', width: 432, height: 576 },
+  { url: '/gallery/16.jpg', width: 432, height: 576 },
+  { url: '/gallery/17.jpg', width: 432, height: 576 },
+  { url: '/gallery/18.jpg', width: 432, height: 576 },
+  { url: '/gallery/19.jpg', width: 432, height: 576 },
+  { url: '/gallery/20.jpg', width: 432, height: 576 },
+  { url: '/gallery/21.jpg', width: 432, height: 576 },
+  { url: '/gallery/22.jpg', width: 432, height: 576 },
+  { url: '/gallery/23.jpg', width: 432, height: 576 },
+  { url: '/gallery/24.jpg', width: 576, height: 432 },
+  { url: '/gallery/25.jpg', width: 576, height: 432 },
+  { url: '/gallery/26.jpg', width: 432, height: 576 },
+  { url: '/gallery/27.jpg', width: 432, height: 576 },
+  { url: '/gallery/28.jpg', width: 576, height: 432 },
+  { url: '/gallery/29.jpg', width: 384, height: 576 },
+  { url: '/gallery/30.jpg', width: 384, height: 576 },
+  { url: '/gallery/31.jpg', width: 576, height: 383 },
+  { url: '/gallery/32.jpg', width: 576, height: 383 },
+];
+
+/** Longer edge along tunnel run (floor/ceiling Z or wall Z) — keeps panels readable. */
+const MAX_GALLERY_PHOTO_ALONG_Z = 2.55;
+
+function configureGalleryPhotoTexture(tex) {
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = Math.min(
+    GALLERY_TEX_MAX_ANISOTROPY,
+    renderer.capabilities.getMaxAnisotropy()
+  );
+}
+
+/**
+ * object-fit: cover via vertex UVs so many meshes can share one Texture (no per-mesh repeat).
+ * Matches PlaneGeometry(1×1 segment) vertex / uv order from three.js.
+ */
+function applyCoverUVsToPlaneGeometry(geom, imageWidth, imageHeight, planeWidth, planeHeight) {
+  const ia = imageWidth / imageHeight;
+  const pa = planeWidth / planeHeight;
+  let uMin = 0;
+  let uMax = 1;
+  let vMin = 0;
+  let vMax = 1;
+  if (ia > pa) {
+    const rx = pa / ia;
+    uMin = (1 - rx) / 2;
+    uMax = uMin + rx;
+  } else {
+    const ry = ia / pa;
+    vMin = (1 - ry) / 2;
+    vMax = vMin + ry;
+  }
+  const uv = geom.attributes.uv;
+  uv.setXY(0, uMin, vMax);
+  uv.setXY(1, uMax, vMax);
+  uv.setXY(2, uMin, vMin);
+  uv.setXY(3, uMax, vMin);
+  uv.needsUpdate = true;
+}
+
+const gallerySharedMaterials = new WeakMap();
+
+function getSharedGalleryMaterial(texture) {
+  let m = gallerySharedMaterials.get(texture);
+  if (!m) {
+    configureGalleryPhotoTexture(texture);
+    texture.repeat.set(1, 1);
+    texture.offset.set(0, 0);
+    m = new THREE.MeshBasicMaterial({
+      map: texture,
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      fog: false,
+      toneMapped: true,
+    });
+    gallerySharedMaterials.set(texture, m);
+  }
+  return m;
+}
+
+function floorCeilingSpansFromPhotoItem(item) {
+  const aspect = item.width / item.height;
+  if (aspect >= 1) {
+    const wx = MAX_GALLERY_PHOTO_ALONG_Z;
+    const dz = wx / aspect;
+    return { wx, dz };
+  }
+  const dz = MAX_GALLERY_PHOTO_ALONG_Z;
+  const wx = dz * aspect;
+  return { wx, dz };
+}
+
+/** Wall PlaneGeometry(dz, dy): image width → tunnel Z (dz), height → Y (dy). */
+function wallSpansFromPhotoItem(item) {
+  const aspect = item.width / item.height;
+  if (aspect >= 1) {
+    const dz = MAX_GALLERY_PHOTO_ALONG_Z;
+    const dy = dz / aspect;
+    return { dz, dy };
+  }
+  const dy = MAX_GALLERY_PHOTO_ALONG_Z;
+  const dz = dy * aspect;
+  return { dz, dy };
+}
+
+function clampWallPhotoSpansToCorridor(cy, dy, dz) {
+  const hy = dy * 0.5;
+  const maxHalf = Math.min(cy - 0.02, CORRIDOR_HEIGHT - cy - 0.02);
+  if (maxHalf <= 0.02) {
+    return { dy: Math.min(dy, 0.35), dz: Math.min(dz, 0.35) };
+  }
+  if (hy <= maxHalf) return { dy, dz };
+  const s = maxHalf / hy;
+  return { dy: dy * s, dz: dz * s };
+}
+
+function finalizeGalleryPhotoMesh(mesh, texture, planeWidth, planeHeight) {
+  const img = texture.image;
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  applyCoverUVsToPlaneGeometry(mesh.geometry, iw, ih, planeWidth, planeHeight);
+  mesh.material.dispose();
+  mesh.material = getSharedGalleryMaterial(texture);
+}
+
 const lookDist = 28;
 
 /** Achromatic grid — soft, understated lines matching lifted cell tones */
@@ -256,173 +416,68 @@ function addCorridor(parent) {
   parent.add(rightWall);
 }
 
-/** Grid-aligned pads — light gray only (parity with corridor grid). */
-function addParallaxGlowBlocks(parent) {
-  const eps = 0.034;
-  const cell = 1 / GRID_SCALE;
-  const len = CORRIDOR_LENGTH;
+/**
+ * Procedural layout: each ring adds many staggered floor / ceiling / wall photos so the tunnel
+ * reads as mostly imagery. `wx`/`dz`/`dy` on specs are ignored — size comes from image aspect.
+ */
+function buildDenseGalleryLayoutSpecs() {
   const h = CORRIDOR_HEIGHT;
-  const midZ = -len / 2;
+  const specs = [];
+  const zEnd = -CORRIDOR_LENGTH * GALLERY_DENSE_Z_EXTENT_FR;
+  const pad = 0.38;
+  const lo = -CORRIDOR_HALF_WIDTH + pad;
+  const hi = CORRIDOR_HALF_WIDTH - pad;
 
-  function matteGray(hex) {
-    const m = new THREE.MeshBasicMaterial({ color: hex });
-    m.fog = false;
-    m.toneMapped = false;
-    return m;
+  let ring = 0;
+  for (let cz = GALLERY_DENSE_Z_START; cz > zEnd; cz -= GALLERY_RING_STEP) {
+    const bump = (ring % 7) * 0.07;
+    const i = ring;
+    const cxF0 = THREE.MathUtils.clamp(-0.7 + (i % 6) * 0.24 + bump, lo, hi);
+    const cxF1 = THREE.MathUtils.clamp(0.55 - ((i * 2) % 5) * 0.22 + bump * 0.5, lo, hi);
+    const cxC0 = THREE.MathUtils.clamp(0.42 - (i % 5) * 0.18, lo, hi);
+    const cxC1 = THREE.MathUtils.clamp(-0.58 + ((i * 3) % 6) * 0.19, lo, hi);
+    const yL0 = THREE.MathUtils.clamp(0.28 + (i % 9) * 0.056 + bump, 0.18, 0.88);
+    const yL1 = THREE.MathUtils.clamp(0.42 + ((i * 2) % 8) * 0.058, 0.2, 0.88);
+    const yR0 = THREE.MathUtils.clamp(0.46 + (i % 7) * 0.06, 0.22, 0.88);
+    const yR1 = THREE.MathUtils.clamp(0.62 + ((i * 3) % 5) * 0.045, 0.28, 0.88);
+
+    const ringBatch = [
+      { kind: 'floor', cx: cxF0, cz, wx: 1, dz: 1 },
+      { kind: 'floor', cx: cxF1, cz: cz - 0.75, wx: 1, dz: 1 },
+      { kind: 'ceiling', cx: cxC0, cz: cz - 1.05, wx: 1, dz: 1 },
+      { kind: 'ceiling', cx: cxC1, cz: cz - 1.78, wx: 1, dz: 1 },
+      { kind: 'left', cy: h * yL0, cz: cz - 2.15, dy: 1, dz: 1 },
+      { kind: 'left', cy: h * yL1, cz: cz - 2.92, dy: 1, dz: 1 },
+      { kind: 'right', cy: h * yR0, cz: cz - 1.42, dy: 1, dz: 1 },
+      { kind: 'right', cy: h * yR1, cz: cz - 2.58, dy: 1, dz: 1 },
+    ];
+
+    if (specs.length + ringBatch.length > GALLERY_MAX_PANELS) break;
+    for (const s of ringBatch) specs.push(s);
+    ring += 1;
   }
-
-  const slabA = matteGray(0xe2e6ee);
-  const slabB = matteGray(0xd6dae2);
-  const slabC = matteGray(0xcaced8);
-
-  function flatFloor(cx, cz, gx, gz) {
-    const hx = (gx * cell * 0.91) / 2;
-    const cxn = THREE.MathUtils.clamp(
-      cx,
-      -CORRIDOR_HALF_WIDTH + hx + 0.02,
-      CORRIDOR_HALF_WIDTH - hx - 0.02
-    );
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(gx * cell * 0.91, eps, gz * cell * 0.91),
-      slabA
-    );
-    mesh.position.set(cxn, eps * 2 - h / 2, cz - midZ);
-    parent.add(mesh);
-  }
-
-  function flatCeiling(cx, cz, gx, gz) {
-    const hx = (gx * cell * 0.91) / 2;
-    const cxn = THREE.MathUtils.clamp(
-      cx,
-      -CORRIDOR_HALF_WIDTH + hx + 0.02,
-      CORRIDOR_HALF_WIDTH - hx - 0.02
-    );
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(gx * cell * 0.91, eps, gz * cell * 0.91),
-      slabB
-    );
-    mesh.position.set(cxn, h / 2 - eps * 2, cz - midZ);
-    parent.add(mesh);
-  }
-
-  function flatLeft(cy, cz, gy, gz) {
-    const hy = (gy * cell * 0.91) / 2;
-    const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(eps, gy * cell * 0.91, gz * cell * 0.91),
-      slabC
-    );
-    mesh.position.set(-CORRIDOR_HALF_WIDTH + eps * 2, cyn - h / 2, cz - midZ);
-    parent.add(mesh);
-  }
-
-  function flatRight(cy, cz, gy, gz) {
-    const hy = (gy * cell * 0.91) / 2;
-    const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(eps, gy * cell * 0.91, gz * cell * 0.91),
-      slabC
-    );
-    mesh.position.set(CORRIDOR_HALF_WIDTH - eps * 2, cyn - h / 2, cz - midZ);
-    parent.add(mesh);
-  }
-
-  /** Rows along -Z — mixed faces so parallax keeps cross-passing cues */
-  const pack = [
-    () => flatFloor(-0.4, -16, 3, 5),
-    () => flatCeiling(1.05, -22, 4, 2),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.45, -30, 4, 6),
-    () => flatRight(CORRIDOR_HEIGHT * 0.62, -26, 2, 5),
-    () => flatFloor(0.7, -38, 5, 2),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.52, -44, 6, 3),
-    () => flatCeiling(-1.05, -50, 2, 4),
-    () => flatRight(CORRIDOR_HEIGHT * 0.42, -48, 5, 2),
-    () => flatFloor(-1.05, -58, 4, 3),
-    () => flatCeiling(0.15, -64, 3, 3),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.72, -70, 2, 9),
-    () => flatRight(CORRIDOR_HEIGHT * 0.76, -66, 3, 4),
-    () => flatFloor(-0.95, -78, 6, 1),
-    () => flatCeiling(1.85, -84, 3, 2),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.54, -90, 3, 3),
-    () => flatRight(CORRIDOR_HEIGHT * 0.62, -96, 2, 6),
-    () => flatFloor(0.2, -102, 2, 6),
-    () => flatCeiling(-2.03, -108, 5, 1),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.82, -114, 2, 4),
-    () => flatFloor(1.05, -120, 2, 2),
-    () => flatRight(CORRIDOR_HEIGHT * 0.74, -118, 4, 3),
-    () => flatCeiling(0.45, -128, 2, 3),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.5, -136, 5, 2),
-    () => flatFloor(-1.46, -132, 3, 2),
-    () => flatRight(CORRIDOR_HEIGHT * 0.92, -144, 2, 2),
-    () => flatCeiling(-0.92, -150, 4, 2),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.6, -158, 2, 5),
-    () => flatFloor(0.5, -168, 4, 2),
-    () => flatRight(CORRIDOR_HEIGHT * 0.46, -172, 3, 3),
-    () => flatCeiling(1.38, -180, 2, 2),
-    () => flatFloor(-0.92, -188, 2, 3),
-    () => flatRight(CORRIDOR_HEIGHT * 0.94, -196, 2, 4),
-    () => flatCeiling(-0.72, -204, 3, 2),
-    () => flatRight(CORRIDOR_HEIGHT * 0.6, -214, 2, 5),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.73, -222, 3, 2),
-    () => flatFloor(0.3, -230, 2, 2),
-    () => flatCeiling(0.78, -248, 2, 6),
-    () => flatCeiling(-0.78, -256, 2, 2),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.6, -260, 2, 2),
-    () => flatLeft(CORRIDOR_HEIGHT * 0.92, -268, 2, 5),
-    () => flatCeiling(0.1, -284, 2, 4),
-    () => flatFloor(0.1, -320, 3, 2),
-    () => flatRight(CORRIDOR_HEIGHT * 0.74, -340, 2, 3),
-  ];
-
-  /** L-like pairs on orthogonal faces */
-  const Lpairs = [
-    () => {
-      flatLeft(CORRIDOR_HEIGHT * 0.5, -188, 2, 3);
-      flatLeft(CORRIDOR_HEIGHT * 0.5 + cell * 2, -188 - cell, 2, 2);
-    },
-    () => {
-      flatRight(CORRIDOR_HEIGHT * 0.45, -320, 2, 4);
-      flatRight(CORRIDOR_HEIGHT * 0.45 + cell * 2, -320 - cell * 2, 3, 2);
-    },
-    () => {
-      flatFloor(-0.5, -360, 3, 2);
-      flatFloor(-0.5 + cell * 2, -360 - cell, 2, 2);
-    },
-  ];
-
-  /** Extra gray slabs spaced deeper so the longer tunnel stays populated */
-  const deepenStep = Math.min(520, CORRIDOR_LENGTH * 0.3);
-  for (let seg = 1; seg * deepenStep < CORRIDOR_LENGTH * 0.9; seg += 1) {
-    const dz = -seg * deepenStep;
-    flatFloor(-0.35, dz - 48, 2, 3);
-    flatCeiling(0.72, dz - 120, 2, 5);
-    flatLeft(CORRIDOR_HEIGHT * 0.55, dz - 180, 2, 4);
-    flatRight(CORRIDOR_HEIGHT * 0.76, dz - 90, 2, 2);
-    flatFloor(0.6, dz - 220, 4, 1);
-    flatCeiling(-0.55, dz - 268, 3, 2);
-  }
-
-  for (const fn of pack) fn();
-  for (const fn of Lpairs) fn();
+  return specs;
 }
 
-/** White gallery panels — only on corridor floor / ceiling / left / right (no mid-air floats). */
-function addWhiteGalleryPlanes(parent) {
+/** Textured gallery only — photos cycle to fill dense layout; shared materials per source texture. */
+function addPhotoGalleryPlanes(parent, galleryTextures) {
   const len = CORRIDOR_LENGTH;
   const h = CORRIDOR_HEIGHT;
   const midZ = -len / 2;
   const lift = 0.03;
 
-  const white = new THREE.MeshBasicMaterial({
-    color: 0xf6f8fc,
-    side: THREE.DoubleSide,
-    fog: false,
-    toneMapped: false,
-  });
+  /** Throw-away material; finalizeGalleryPhotoMesh replaces it. */
+  function placeholderMaterial() {
+    return new THREE.MeshBasicMaterial({
+      color: 0x040508,
+      toneMapped: false,
+      fog: false,
+    });
+  }
 
-  function whiteFloor(cx, cz, wx, dz) {
+  function addFloorPanel(cx, cz, wx, dz, texture) {
     const geo = new THREE.PlaneGeometry(wx, dz);
-    const mesh = new THREE.Mesh(geo, white);
+    const mesh = new THREE.Mesh(geo, placeholderMaterial());
     mesh.rotation.x = -Math.PI / 2;
     const hx = wx / 2;
     const cxn = THREE.MathUtils.clamp(
@@ -432,12 +487,13 @@ function addWhiteGalleryPlanes(parent) {
     );
     mesh.position.set(cxn, -h / 2 + lift, cz - midZ);
     mesh.renderOrder = 1;
+    finalizeGalleryPhotoMesh(mesh, texture, wx, dz);
     parent.add(mesh);
   }
 
-  function whiteCeiling(cx, cz, wx, dz) {
+  function addCeilingPanel(cx, cz, wx, dz, texture) {
     const geo = new THREE.PlaneGeometry(wx, dz);
-    const mesh = new THREE.Mesh(geo, white);
+    const mesh = new THREE.Mesh(geo, placeholderMaterial());
     mesh.rotation.x = Math.PI / 2;
     const hx = wx / 2;
     const cxn = THREE.MathUtils.clamp(
@@ -447,104 +503,78 @@ function addWhiteGalleryPlanes(parent) {
     );
     mesh.position.set(cxn, h / 2 - lift, cz - midZ);
     mesh.renderOrder = 1;
+    finalizeGalleryPhotoMesh(mesh, texture, wx, dz);
     parent.add(mesh);
   }
 
-  function whiteLeft(cy, cz, dy, dz) {
+  function addLeftWallPanel(cy, cz, dy, dz, texture) {
     const hy = dy / 2;
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), white);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), placeholderMaterial());
     mesh.rotation.y = Math.PI / 2;
     mesh.position.set(-CORRIDOR_HALF_WIDTH + lift, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
+    finalizeGalleryPhotoMesh(mesh, texture, dz, dy);
     parent.add(mesh);
   }
 
-  function whiteRight(cy, cz, dy, dz) {
+  function addRightWallPanel(cy, cz, dy, dz, texture) {
     const hy = dy / 2;
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), white);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), placeholderMaterial());
     mesh.rotation.y = -Math.PI / 2;
     mesh.position.set(CORRIDOR_HALF_WIDTH - lift, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
+    finalizeGalleryPhotoMesh(mesh, texture, dz, dy);
     parent.add(mesh);
   }
 
-  /** Hand-authored patches along −Z; same spirit as gray slabs, larger “frames”. */
-  const whitePack = [
-    () => whiteFloor(-0.55, -24, 1.15, 1.8),
-    () => whiteCeiling(0.65, -30, 1.4, 1.1),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.38, -36, 1.25, 2.1),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.65, -32, 1.4, 1.6),
-    () => whiteFloor(0.45, -48, 1.8, 1.0),
-    () => whiteCeiling(-0.72, -54, 1.0, 2.2),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.72, -60, 0.95, 2.6),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.48, -58, 1.2, 1.9),
-    () => whiteFloor(-0.25, -72, 1.3, 1.45),
-    () => whiteCeiling(0.35, -78, 1.55, 1.35),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.52, -86, 1.6, 1.4),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.78, -82, 1.0, 2.4),
-    () => whiteFloor(0.85, -96, 1.1, 2.0),
-    () => whiteCeiling(-0.45, -102, 1.7, 1.0),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.42, -110, 1.35, 1.8),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.58, -106, 1.5, 1.5),
-    () => whiteFloor(-0.95, -120, 1.6, 1.2),
-    () => whiteCeiling(0.92, -128, 1.2, 1.7),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.66, -136, 1.1, 2.2),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.44, -132, 1.25, 1.75),
-    () => whiteFloor(0.15, -148, 2.0, 0.85),
-    () => whiteCeiling(-0.88, -154, 1.45, 1.25),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.86, -162, 0.9, 2.3),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.52, -158, 1.55, 1.35),
-    () => whiteFloor(-0.35, -172, 1.25, 1.55),
-    () => whiteCeiling(0.28, -180, 1.9, 1.05),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.48, -188, 1.45, 1.6),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.7, -184, 1.15, 2.0),
-    () => whiteFloor(0.62, -198, 1.35, 1.4),
-    () => whiteCeiling(-0.58, -206, 1.2, 1.9),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.58, -214, 1.3, 1.7),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.88, -210, 0.95, 2.5),
-    () => whiteFloor(-0.72, -226, 1.5, 1.1),
-    () => whiteCeiling(0.78, -234, 1.35, 1.45),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.74, -242, 1.2, 1.85),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.4, -238, 1.65, 1.2),
-    () => whiteFloor(0.35, -252, 1.1, 1.85),
-    () => whiteCeiling(-0.22, -260, 1.65, 1.15),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.62, -268, 1.4, 1.45),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.62, -264, 1.4, 1.45),
-    () => whiteFloor(-0.15, -280, 1.8, 1.0),
-    () => whiteCeiling(0.48, -288, 1.1, 1.75),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.5, -296, 1.6, 1.3),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.76, -292, 1.05, 2.15),
-    () => whiteFloor(0.92, -308, 1.2, 1.5),
-    () => whiteCeiling(-0.72, -316, 1.5, 1.2),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.8, -324, 1.0, 2.0),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.46, -320, 1.45, 1.45),
-    () => whiteFloor(-0.48, -336, 1.4, 1.35),
-    () => whiteCeiling(0.15, -344, 1.8, 1.0),
-    () => whiteLeft(CORRIDOR_HEIGHT * 0.54, -352, 1.25, 1.65),
-    () => whiteRight(CORRIDOR_HEIGHT * 0.7, -348, 1.25, 1.65),
-  ];
+  const specs = buildDenseGalleryLayoutSpecs();
+  specs.sort((a, b) => b.cz - a.cz);
 
-  const deepenStep = Math.min(520, CORRIDOR_LENGTH * 0.3);
-  for (let seg = 1; seg * deepenStep < CORRIDOR_LENGTH * 0.92; seg += 1) {
-    const d = -seg * deepenStep;
-    whiteFloor(-0.62, d - 14, 1.05, 1.35);
-    whiteFloor(0.58, d - 92, 1.35, 1.1);
-    whiteCeiling(0.55, d - 38, 1.25, 1.2);
-    whiteCeiling(-0.68, d - 118, 1.15, 1.45);
-    whiteLeft(CORRIDOR_HEIGHT * 0.45, d - 62, 1.2, 1.6);
-    whiteLeft(CORRIDOR_HEIGHT * 0.78, d - 142, 1.0, 1.8);
-    whiteRight(CORRIDOR_HEIGHT * 0.55, d - 52, 1.35, 1.45);
-    whiteRight(CORRIDOR_HEIGHT * 0.82, d - 128, 0.95, 1.9);
+  const numTex = galleryTextures.length;
+  if (numTex === 0) return;
+
+  const nItem = GALLERY_ITEMS.length;
+  const n = Math.min(specs.length, GALLERY_MAX_PANELS);
+
+  for (let i = 0; i < n; i += 1) {
+    const s = specs[i];
+    const tex = galleryTextures[i % numTex];
+    const item = GALLERY_ITEMS[i % nItem];
+    if (s.kind === 'floor') {
+      const { wx, dz } = floorCeilingSpansFromPhotoItem(item);
+      addFloorPanel(s.cx, s.cz, wx, dz, tex);
+    } else if (s.kind === 'ceiling') {
+      const { wx, dz } = floorCeilingSpansFromPhotoItem(item);
+      addCeilingPanel(s.cx, s.cz, wx, dz, tex);
+    } else {
+      let { dz: wdz, dy } = wallSpansFromPhotoItem(item);
+      const fitted = clampWallPhotoSpansToCorridor(s.cy, dy, wdz);
+      dy = fitted.dy;
+      wdz = fitted.dz;
+      if (s.kind === 'left') addLeftWallPanel(s.cy, s.cz, dy, wdz, tex);
+      else addRightWallPanel(s.cy, s.cz, dy, wdz, tex);
+    }
   }
-
-  for (const fn of whitePack) fn();
 }
 
 addCorridor(corridorRoot);
-addParallaxGlowBlocks(corridorRoot);
-addWhiteGalleryPlanes(corridorRoot);
+
+async function startExperience() {
+  try {
+    const galleryTextures = await Promise.all(
+      GALLERY_ITEMS.map((it) => textureLoader.loadAsync(it.url))
+    );
+    addPhotoGalleryPlanes(corridorRoot, galleryTextures);
+  } catch (err) {
+    console.warn('Could not load gallery images; continuing without photo panels.', err);
+    addPhotoGalleryPlanes(corridorRoot, []);
+  }
+  animate();
+}
+
+void startExperience();
 
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -983,5 +1013,3 @@ function animate() {
 
   renderer.render(scene, camera);
 }
-
-animate();
