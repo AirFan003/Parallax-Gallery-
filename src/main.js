@@ -1,15 +1,22 @@
 import * as THREE from 'three';
+import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+/** MediaPipe hand landmark index — index fingertip */
+const INDEX_FINGER_TIP = 8;
 
 const CORRIDOR_HALF_WIDTH = 2.15;
 const CORRIDOR_HEIGHT = 3.45;
-/** Long run so slow camera drift stays inside geometry */
-const CORRIDOR_LENGTH = 720;
+/** Long run — larger value lets the glide loop restart farther down-tunnel */
+const CORRIDOR_LENGTH = 1680;
 
 /** Camera height as fraction of tunnel height — centered-ish */
 const EYE_HEIGHT = CORRIDOR_HEIGHT * 0.45;
 const CAMERA_START_Z = 3.2;
-/** Mouse Y: top of viewport (low clientY) = fast forward, bottom = slow/stop */
-const FWD_SPEED_AT_TOP = 2.0;
+/**
+ * Forward speed from vertical control (mouse Y, or right index fingertip Y when tracked).
+ * Top = fast forward; bottom = stop (no reverse motion).
+ */
+const FWD_SPEED_AT_TOP = 3.85;
 const FWD_SPEED_AT_BOTTOM = 0;
 /** Mouse X: hall roll about tunnel axis — left viewport = anticlockwise, right = clockwise */
 const CORRIDOR_ROLL_MAX = THREE.MathUtils.degToRad(52);
@@ -36,7 +43,7 @@ const camera = new THREE.PerspectiveCamera(
   62,
   window.innerWidth / window.innerHeight,
   0.05,
-  900
+  3200
 );
 camera.position.set(0, EYE_HEIGHT, CAMERA_START_Z);
 
@@ -50,8 +57,8 @@ document.body.appendChild(renderer.domElement);
 
 const lookDist = 28;
 
-/** Achromatic grid — same on all four faces (no per-wall hue). */
-const GRID_LINE_LIGHT = new THREE.Color(0xd4d8e0);
+/** Achromatic grid — soft, understated lines matching lifted cell tones */
+const GRID_LINE_LIGHT = new THREE.Color(0xa7abb4);
 const GRID_CELL_BASE = new THREE.Color(0x1e222a);
 const GRID_CELL_LIFT = new THREE.Color(0x2a3038);
 
@@ -61,11 +68,11 @@ function shaderUniforms(face, lineCol, cellBase, cellLift) {
     uCellBase: { value: new THREE.Vector3(cellBase.r, cellBase.g, cellBase.b) },
     uCellLift: { value: new THREE.Vector3(cellLift.r, cellLift.g, cellLift.b) },
     uLineColor: { value: new THREE.Vector3(lineCol.r, lineCol.g, lineCol.b) },
-    uLineMix: { value: 0.72 },
-    uLineBoost: { value: 0.1 },
+    uLineMix: { value: 0.38 },
+    uLineBoost: { value: 0.035 },
     uGridScale: { value: GRID_SCALE },
     uFogColor: { value: new THREE.Vector3(BACKGROUND.r, BACKGROUND.g, BACKGROUND.b) },
-    uFogDensity: { value: 0.024 },
+    uFogDensity: { value: 0.031 },
     uCameraWorldPos: { value: new THREE.Vector3() },
   };
 }
@@ -107,7 +114,7 @@ function makeGridMaterial(faceIndex) {
                        length(vec2(dFdx(coord.y), dFdy(coord.y))));
         vec2 gv = fract(coord - 0.5) - 0.5;
         vec2 gAbs = abs(gv);
-        vec2 line = smoothstep(fw * 0.55, fw * 1.12, gAbs);
+        vec2 line = smoothstep(fw * 0.72, fw * 1.22, gAbs);
         float m = 1.0 - min(line.x, line.y);
         return m;
       }
@@ -123,8 +130,8 @@ function makeGridMaterial(faceIndex) {
         }
 
         float g = gridLine(gc);
-        vec3 fill = uCellBase * 0.58;
-        vec3 base = mix(fill, uCellLift * 0.52, 0.24);
+        vec3 fill = uCellBase * 0.5;
+        vec3 base = mix(fill, uCellLift * 0.48, 0.18);
         vec3 col = mix(base, uLineColor, g * uLineMix);
         col += uLineColor * g * uLineBoost;
         float fogF = 1.0 - exp(-vFogDist * uFogDensity);
@@ -313,6 +320,18 @@ function addParallaxGlowBlocks(parent) {
     },
   ];
 
+  /** Extra gray slabs spaced deeper so the longer tunnel stays populated */
+  const deepenStep = Math.min(520, CORRIDOR_LENGTH * 0.3);
+  for (let seg = 1; seg * deepenStep < CORRIDOR_LENGTH * 0.9; seg += 1) {
+    const dz = -seg * deepenStep;
+    flatFloor(-0.35, dz - 48, 2, 3);
+    flatCeiling(0.72, dz - 120, 2, 5);
+    flatLeft(CORRIDOR_HEIGHT * 0.55, dz - 180, 2, 4);
+    flatRight(CORRIDOR_HEIGHT * 0.76, dz - 90, 2, 2);
+    flatFloor(0.6, dz - 220, 4, 1);
+    flatCeiling(-0.55, dz - 268, 3, 2);
+  }
+
   for (const fn of pack) fn();
   for (const fn of Lpairs) fn();
 }
@@ -328,28 +347,118 @@ function onResize() {
 
 window.addEventListener('resize', onResize);
 
-/** 0 = top of viewport, 1 = bottom — interpolated into forward speed each frame */
-let pointerYNormalized = 0.4;
+/** 0 = top of viewport, 1 = bottom — from mouse; used when hand is not driving */
+let mouseYNormalized = 0.4;
+/** Latest target from hand (updated on each video frame, not every render frame) */
+let handTargetYNormalized = 0.4;
+/** Display-follow value — quick lerp in animate so motion stays smooth between camera frames */
+let handSmoothedYNormalized = 0.4;
+/** True when the last video-frame pass saw a right index tip */
+let handHasRightIndex = false;
 /** 0 = left edge, 1 = right — drives corridor roll about tunnel axis */
 let pointerXNormalized = 0.5;
 
 function onPointerMove(event) {
   const h = window.innerHeight || 1;
   const w = window.innerWidth || 1;
-  pointerYNormalized = THREE.MathUtils.clamp(event.clientY / h, 0, 1);
+  mouseYNormalized = THREE.MathUtils.clamp(event.clientY / h, 0, 1);
   pointerXNormalized = THREE.MathUtils.clamp(event.clientX / w, 0, 1);
 }
 
 window.addEventListener('pointermove', onPointerMove, { passive: true });
 
+const handVideo = document.createElement('video');
+handVideo.setAttribute('playsinline', '');
+handVideo.muted = true;
+Object.assign(handVideo.style, {
+  position: 'fixed',
+  width: '1px',
+  height: '1px',
+  opacity: '0',
+  pointerEvents: 'none',
+});
+document.body.appendChild(handVideo);
+
+let handLandmarker = null;
+
+function onHandLandmarkerVideoFrame() {
+  handHasRightIndex = false;
+  if (
+    handLandmarker &&
+    handVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+  ) {
+    const result = handLandmarker.detectForVideo(handVideo, performance.now());
+    for (let i = 0; i < result.landmarks.length; i++) {
+      const handed = result.handedness[i];
+      const label = handed?.[0]?.categoryName ?? handed?.[0]?.displayName ?? '';
+      if (!label.toLowerCase().includes('right')) continue;
+      const tip = result.landmarks[i][INDEX_FINGER_TIP];
+      if (!tip) continue;
+      handTargetYNormalized = THREE.MathUtils.clamp(tip.y, 0, 1);
+      handHasRightIndex = true;
+      break;
+    }
+  }
+  handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
+}
+
+async function initHandTracking() {
+  try {
+    const wasmPath =
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
+    const fileset = await FilesetResolver.forVisionTasks(wasmPath);
+    handLandmarker = await HandLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath:
+          'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+        delegate: 'CPU',
+      },
+      runningMode: 'VIDEO',
+      numHands: 2,
+    });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 480 },
+        height: { ideal: 360 },
+        frameRate: { ideal: 30, max: 30 },
+      },
+    });
+    handVideo.srcObject = stream;
+    await handVideo.play();
+    handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
+  } catch (err) {
+    console.warn('Hand tracking unavailable, using mouse for speed only:', err);
+    handLandmarker = null;
+  }
+}
+
+void initHandTracking();
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
+  /** Follow fingertip quickly without stacking smoothing + duplicated per-frame inference */
+  if (handHasRightIndex) {
+    const snap = Math.min(1, dt * 52);
+    handSmoothedYNormalized = THREE.MathUtils.lerp(
+      handSmoothedYNormalized,
+      handTargetYNormalized,
+      snap
+    );
+  } else {
+    handSmoothedYNormalized = mouseYNormalized;
+  }
+
+  const forwardYNormalized = handHasRightIndex
+    ? handSmoothedYNormalized
+    : mouseYNormalized;
+
   const fwdSpeed = THREE.MathUtils.lerp(
     FWD_SPEED_AT_TOP,
     FWD_SPEED_AT_BOTTOM,
-    pointerYNormalized
+    forwardYNormalized
   );
   camera.position.z -= fwdSpeed * dt;
   if (camera.position.z < -CORRIDOR_LENGTH + 40) {
