@@ -40,34 +40,32 @@ document.body.appendChild(renderer.domElement);
 
 const lookDist = 28;
 
-/** Neutral gray grid — slightly subdued so wires feel faint but legible */
-const GRID_LINE_GRAY = new THREE.Color(0xaaaeb9);
-const GRID_SURFACE_FILL = new THREE.Color(0x1a1f29);
-const GRID_SURFACE_TINT = new THREE.Color(0x262c38);
+/** Achromatic grid — same on all four faces (no per-wall hue). */
+const GRID_LINE_LIGHT = new THREE.Color(0xd4d8e0);
+const GRID_CELL_BASE = new THREE.Color(0x1e222a);
+const GRID_CELL_LIFT = new THREE.Color(0x2a3038);
 
-function shaderUniforms(face, lineCol, surfaceFill, surfaceTint) {
+function shaderUniforms(face, lineCol, cellBase, cellLift) {
   return {
     uFace: { value: face },
-    uAccent: { value: new THREE.Vector3(surfaceTint.r, surfaceTint.g, surfaceTint.b) },
-    uFillTint: { value: new THREE.Vector3(surfaceFill.r, surfaceFill.g, surfaceFill.b) },
+    uCellBase: { value: new THREE.Vector3(cellBase.r, cellBase.g, cellBase.b) },
+    uCellLift: { value: new THREE.Vector3(cellLift.r, cellLift.g, cellLift.b) },
     uLineColor: { value: new THREE.Vector3(lineCol.r, lineCol.g, lineCol.b) },
-    /** How strongly grid lines tint over base (still gray, readable) */
-    uLineStrength: { value: 0.7 },
-    /** Extra additive lift only on wires so faint screens still resolve */
-    uLineBoost: { value: 0.12 },
+    uLineMix: { value: 0.72 },
+    uLineBoost: { value: 0.1 },
     uGridScale: { value: GRID_SCALE },
     uFogColor: { value: new THREE.Vector3(BACKGROUND.r, BACKGROUND.g, BACKGROUND.b) },
-    uFogDensity: { value: 0.023 },
+    uFogDensity: { value: 0.024 },
     uCameraWorldPos: { value: new THREE.Vector3() },
   };
 }
 
 function makeGridMaterial(faceIndex) {
-  const lineCol = GRID_LINE_GRAY.clone();
-  const fill = GRID_SURFACE_FILL.clone();
-  const tint = GRID_SURFACE_TINT.clone();
+  const lineCol = GRID_LINE_LIGHT.clone();
+  const base = GRID_CELL_BASE.clone();
+  const lift = GRID_CELL_LIFT.clone();
   return new THREE.ShaderMaterial({
-    uniforms: shaderUniforms(faceIndex, lineCol, fill, tint),
+    uniforms: shaderUniforms(faceIndex, lineCol, base, lift),
     vertexShader: /* glsl */ `
       varying vec3 vWorldPosition;
       varying float vFogDist;
@@ -83,10 +81,10 @@ function makeGridMaterial(faceIndex) {
       precision highp float;
       varying vec3 vWorldPosition;
       varying float vFogDist;
-      uniform vec3 uAccent;
-      uniform vec3 uFillTint;
+      uniform vec3 uCellBase;
+      uniform vec3 uCellLift;
       uniform vec3 uLineColor;
-      uniform float uLineStrength;
+      uniform float uLineMix;
       uniform float uLineBoost;
       uniform float uGridScale;
       uniform int uFace;
@@ -115,11 +113,10 @@ function makeGridMaterial(faceIndex) {
         }
 
         float g = gridLine(gc);
-        vec3 fill = uFillTint * 0.56;
-        vec3 base = mix(fill, uAccent * 0.45, 0.2);
-        vec3 lineMix = mix(base, uLineColor, g * uLineStrength);
-        vec3 col = lineMix + uLineColor * g * uLineBoost;
-        col += uAccent * g * (uLineStrength * 0.04);
+        vec3 fill = uCellBase * 0.58;
+        vec3 base = mix(fill, uCellLift * 0.52, 0.24);
+        vec3 col = mix(base, uLineColor, g * uLineMix);
+        col += uLineColor * g * uLineBoost;
         float fogF = 1.0 - exp(-vFogDist * uFogDensity);
         col = mix(col, uFogColor, fogF);
         gl_FragColor = vec4(col, 1.0);
@@ -129,7 +126,7 @@ function makeGridMaterial(faceIndex) {
   });
 }
 
-/** Same neutral grid on floor, ceiling, and both walls (face selector only differs). */
+/** Same neutral light-gray grid on floor, ceiling, and both walls. */
 const planeMat = {
   floor: makeGridMaterial(0),
   ceiling: makeGridMaterial(1),
@@ -172,22 +169,21 @@ function addCorridor() {
   scene.add(rightWall);
 }
 
-/** Glowing grid-aligned pads (classic synth-floor palette vs wall). */
+/** Grid-aligned pads — light gray only (parity with corridor grid). */
 function addParallaxGlowBlocks() {
   const eps = 0.034;
   const cell = 1 / GRID_SCALE;
 
-  function neon(hex) {
+  function matteGray(hex) {
     const m = new THREE.MeshBasicMaterial({ color: hex });
     m.fog = false;
     m.toneMapped = false;
     return m;
   }
 
-  const floorC = neon(0x38e8ff);
-  const ceilC = neon(0xffb04d);
-  const leftC = neon(0x50ff96);
-  const rightC = neon(0xff5a72);
+  const slabA = matteGray(0xe2e6ee);
+  const slabB = matteGray(0xd6dae2);
+  const slabC = matteGray(0xcaced8);
 
   function flatFloor(cx, cz, gx, gz) {
     const hx = (gx * cell * 0.91) / 2;
@@ -198,7 +194,7 @@ function addParallaxGlowBlocks() {
     );
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(gx * cell * 0.91, eps, gz * cell * 0.91),
-      floorC
+      slabA
     );
     mesh.position.set(cxn, eps * 2, cz);
     scene.add(mesh);
@@ -213,7 +209,7 @@ function addParallaxGlowBlocks() {
     );
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(gx * cell * 0.91, eps, gz * cell * 0.91),
-      ceilC
+      slabB
     );
     mesh.position.set(cxn, CORRIDOR_HEIGHT - eps * 2, cz);
     scene.add(mesh);
@@ -224,7 +220,7 @@ function addParallaxGlowBlocks() {
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(eps, gy * cell * 0.91, gz * cell * 0.91),
-      leftC
+      slabC
     );
     mesh.position.set(-CORRIDOR_HALF_WIDTH + eps * 2, cyn, cz);
     scene.add(mesh);
@@ -235,7 +231,7 @@ function addParallaxGlowBlocks() {
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(eps, gy * cell * 0.91, gz * cell * 0.91),
-      rightC
+      slabC
     );
     mesh.position.set(CORRIDOR_HALF_WIDTH - eps * 2, cyn, cz);
     scene.add(mesh);
