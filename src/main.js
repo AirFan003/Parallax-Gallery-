@@ -1,8 +1,21 @@
 import * as THREE from 'three';
-import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+import {
+  DrawingUtils,
+  FilesetResolver,
+  HandLandmarker,
+} from '@mediapipe/tasks-vision';
 
-/** MediaPipe hand landmark index — index fingertip */
+/** MediaPipe hand landmarks */
+const INDEX_FINGER_MCP = 5;
+const PINKY_MCP = 17;
 const INDEX_FINGER_TIP = 8;
+
+/** Exponential smoothing on knuckle-line angle: smoothed = α·smoothed + (1−α)·raw */
+const LEFT_KNUCKLE_ANGLE_SMOOTH_ALPHA = 0.85;
+/** No roll response within ±this many radians of calibrated neutral */
+const LEFT_ROLL_DEAD_ZONE_RAD = THREE.MathUtils.degToRad(15);
+/** Knuckle tilt beyond dead zone maps to full hall roll at this delta (radians) */
+const LEFT_ROLL_MAX_TILT_RAD = THREE.MathUtils.degToRad(48);
 
 const CORRIDOR_HALF_WIDTH = 2.15;
 const CORRIDOR_HEIGHT = 3.45;
@@ -18,11 +31,37 @@ const CAMERA_START_Z = 3.2;
  */
 const FWD_SPEED_AT_TOP = 3.85;
 const FWD_SPEED_AT_BOTTOM = 0;
-/** Mouse X: hall roll about tunnel axis — left viewport = anticlockwise, right = clockwise */
+/** Max tilt magnitude (radians) when knuckle line drives roll (after calibration). */
 const CORRIDOR_ROLL_MAX = THREE.MathUtils.degToRad(52);
 
 /** World-space grid density (cells per unit) — tuned for Tetris-ish scale */
 const GRID_SCALE = 1.8;
+
+function angleDeltaShortest(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+function circularMeanAngles(angles) {
+  if (!angles.length) return 0;
+  let sx = 0;
+  let sy = 0;
+  for (const ang of angles) {
+    sx += Math.cos(ang);
+    sy += Math.sin(ang);
+  }
+  return Math.atan2(sy / angles.length, sx / angles.length);
+}
+
+/** Index MCP → pinky MCP knuckle line angle in image space (radians). */
+function leftKnuckleLineAngleFromLm(lm) {
+  const idx = lm[INDEX_FINGER_MCP];
+  const pky = lm[PINKY_MCP];
+  if (!idx || !pky) return null;
+  return Math.atan2(pky.y - idx.y, pky.x - idx.x);
+}
 
 const scene = new THREE.Scene();
 const BACKGROUND = new THREE.Color(0x010104);
@@ -355,50 +394,273 @@ let handTargetYNormalized = 0.4;
 let handSmoothedYNormalized = 0.4;
 /** True when the last video-frame pass saw a right index tip */
 let handHasRightIndex = false;
-/** 0 = left edge, 1 = right — drives corridor roll about tunnel axis */
-let pointerXNormalized = 0.5;
+
+/** Left-hand knuckle line: calibration & runtime ('loading' | 'awaiting_flat' | 'done' | 'skipped') */
+let leftHandCalibrationState = 'loading';
+let neutralKnuckleAngleRad = 0;
+let calHoldSeconds = 0;
+const calSampleAngles = [];
+let lastVideoFrameTimeMs = null;
+
+let handHasLeftKnuckle = false;
+let leftKnuckleAngleSmoothed = 0;
+let leftKnuckleAngleSmoothedInit = false;
+
+let corridorRollSmoothed = 0;
 
 function onPointerMove(event) {
   const h = window.innerHeight || 1;
-  const w = window.innerWidth || 1;
   mouseYNormalized = THREE.MathUtils.clamp(event.clientY / h, 0, 1);
-  pointerXNormalized = THREE.MathUtils.clamp(event.clientX / w, 0, 1);
 }
 
 window.addEventListener('pointermove', onPointerMove, { passive: true });
 
+const handPreviewWrap = document.createElement('div');
+handPreviewWrap.id = 'hand-tracking-preview';
+
 const handVideo = document.createElement('video');
 handVideo.setAttribute('playsinline', '');
 handVideo.muted = true;
-Object.assign(handVideo.style, {
-  position: 'fixed',
-  width: '1px',
-  height: '1px',
-  opacity: '0',
-  pointerEvents: 'none',
-});
-document.body.appendChild(handVideo);
+handPreviewWrap.appendChild(handVideo);
+
+const handPreviewCanvas = document.createElement('canvas');
+handPreviewCanvas.id = 'hand-preview-overlay';
+handPreviewWrap.appendChild(handPreviewCanvas);
+
+document.body.appendChild(handPreviewWrap);
+
+let handPreviewDrawingUtils = null;
+
+function syncHandPreviewCanvas() {
+  const vw = handVideo.videoWidth;
+  const vh = handVideo.videoHeight;
+  if (!vw || !vh) return false;
+  if (
+    handPreviewCanvas.width !== vw ||
+    handPreviewCanvas.height !== vh
+  ) {
+    handPreviewCanvas.width = vw;
+    handPreviewCanvas.height = vh;
+    handPreviewDrawingUtils = new DrawingUtils(
+      handPreviewCanvas.getContext('2d')
+    );
+  }
+  return true;
+}
+
+function clearHandPreviewCanvas() {
+  if (!handPreviewCanvas.width || !handPreviewCanvas.height) return;
+  const ctx = handPreviewCanvas.getContext('2d');
+  ctx.clearRect(0, 0, handPreviewCanvas.width, handPreviewCanvas.height);
+}
+
+function drawHandPreviewOverlay(result) {
+  if (!syncHandPreviewCanvas() || !handPreviewDrawingUtils) return;
+  const ctx = handPreviewCanvas.getContext('2d');
+  ctx.clearRect(0, 0, handPreviewCanvas.width, handPreviewCanvas.height);
+  for (let i = 0; i < result.landmarks.length; i++) {
+    const lm = result.landmarks[i];
+    const handed = result.handedness[i];
+    const name = (handed?.[0]?.categoryName ?? '').toLowerCase();
+    const isLeft = name.includes('left');
+    const lineOpts = {
+      color: isLeft
+        ? 'rgba(96, 210, 255, 0.88)'
+        : 'rgba(255, 130, 190, 0.88)',
+      lineWidth: 2,
+    };
+    const pointOpts = {
+      color: isLeft
+        ? 'rgba(220, 250, 255, 0.96)'
+        : 'rgba(255, 230, 245, 0.96)',
+      lineWidth: 1,
+      radius: 2.75,
+    };
+    handPreviewDrawingUtils.drawConnectors(
+      lm,
+      HandLandmarker.HAND_CONNECTIONS,
+      lineOpts
+    );
+    handPreviewDrawingUtils.drawLandmarks(lm, pointOpts);
+  }
+}
+
+const calStyle = document.createElement('style');
+calStyle.textContent = `
+#left-hand-calibration {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: opacity 0.45s ease;
+}
+#left-hand-calibration .cal-card {
+  pointer-events: auto;
+  max-width: 26rem;
+  margin: 1rem;
+  padding: 1.35rem 1.5rem;
+  background: rgba(16, 18, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  color: #e8eaf0;
+  font: 15px/1.45 system-ui, sans-serif;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+#left-hand-calibration .cal-title { font-weight: 600; margin-bottom: 0.65rem; }
+#left-hand-calibration .cal-bar-wrap {
+  margin-top: 1rem;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+#left-hand-calibration .cal-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #6b8cff, #a78bfa);
+  transition: width 0.08s linear;
+}
+#hand-tracking-preview {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 9000;
+  width: min(280px, 34vw);
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  background: #050508;
+  transform: scaleX(-1);
+}
+#hand-tracking-preview video,
+#hand-tracking-preview canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+#hand-tracking-preview canvas {
+  pointer-events: none;
+}
+`;
+document.head.appendChild(calStyle);
+
+const calOverlay = document.createElement('div');
+calOverlay.id = 'left-hand-calibration';
+calOverlay.innerHTML = `
+  <div class="cal-card">
+    <div class="cal-title">Left hand calibration</div>
+    <p class="cal-msg">Loading hand tracking…</p>
+    <div class="cal-bar-wrap"><div class="cal-bar"></div></div>
+  </div>
+`;
+document.body.appendChild(calOverlay);
+const calMsgEl = calOverlay.querySelector('.cal-msg');
+const calBarEl = calOverlay.querySelector('.cal-bar');
+
+function setCalibrationBar(p01) {
+  calBarEl.style.width = `${THREE.MathUtils.clamp(p01, 0, 1) * 100}%`;
+}
+
+function hideCalibrationOverlay() {
+  calOverlay.style.opacity = '0';
+  setTimeout(() => {
+    calOverlay.style.display = 'none';
+  }, 500);
+}
 
 let handLandmarker = null;
 
-function onHandLandmarkerVideoFrame() {
+function onHandLandmarkerVideoFrame(now) {
+  const tMs = typeof now === 'number' ? now : performance.now();
+  let dtFrame = 0;
+  if (lastVideoFrameTimeMs != null) {
+    dtFrame = Math.min(0.1, (tMs - lastVideoFrameTimeMs) / 1000);
+  }
+  lastVideoFrameTimeMs = tMs;
+
   handHasRightIndex = false;
+  handHasLeftKnuckle = false;
+
   if (
-    handLandmarker &&
-    handVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    !handLandmarker ||
+    handVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
   ) {
-    const result = handLandmarker.detectForVideo(handVideo, performance.now());
-    for (let i = 0; i < result.landmarks.length; i++) {
-      const handed = result.handedness[i];
-      const label = handed?.[0]?.categoryName ?? handed?.[0]?.displayName ?? '';
-      if (!label.toLowerCase().includes('right')) continue;
-      const tip = result.landmarks[i][INDEX_FINGER_TIP];
-      if (!tip) continue;
-      handTargetYNormalized = THREE.MathUtils.clamp(tip.y, 0, 1);
-      handHasRightIndex = true;
-      break;
+    clearHandPreviewCanvas();
+    handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
+    return;
+  }
+
+  const result = handLandmarker.detectForVideo(handVideo, performance.now());
+  drawHandPreviewOverlay(result);
+  let leftLm = null;
+
+  for (let i = 0; i < result.landmarks.length; i++) {
+    const handed = result.handedness[i];
+    const label = (
+      handed?.[0]?.categoryName ??
+      handed?.[0]?.displayName ??
+      ''
+    ).toLowerCase();
+    const lm = result.landmarks[i];
+
+    if (label.includes('right')) {
+      const tip = lm[INDEX_FINGER_TIP];
+      if (tip) {
+        handTargetYNormalized = THREE.MathUtils.clamp(tip.y, 0, 1);
+        handHasRightIndex = true;
+      }
+    } else if (label.includes('left')) {
+      leftLm = lm;
     }
   }
+
+  if (leftLm) {
+    const ang = leftKnuckleLineAngleFromLm(leftLm);
+    if (ang !== null) {
+      handHasLeftKnuckle = true;
+
+      if (leftHandCalibrationState === 'awaiting_flat') {
+        calHoldSeconds += dtFrame;
+        calSampleAngles.push(ang);
+        setCalibrationBar(Math.min(1, calHoldSeconds));
+        if (calHoldSeconds >= 1) {
+          neutralKnuckleAngleRad = circularMeanAngles(calSampleAngles);
+          leftHandCalibrationState = 'done';
+          leftKnuckleAngleSmoothed = neutralKnuckleAngleRad;
+          leftKnuckleAngleSmoothedInit = true;
+          calMsgEl.textContent = 'Calibrated. Enjoy!';
+          setCalibrationBar(1);
+          hideCalibrationOverlay();
+        }
+      } else if (leftHandCalibrationState === 'done') {
+        if (!leftKnuckleAngleSmoothedInit) {
+          leftKnuckleAngleSmoothed = ang;
+          leftKnuckleAngleSmoothedInit = true;
+        } else {
+          leftKnuckleAngleSmoothed =
+            LEFT_KNUCKLE_ANGLE_SMOOTH_ALPHA * leftKnuckleAngleSmoothed +
+            (1 - LEFT_KNUCKLE_ANGLE_SMOOTH_ALPHA) * ang;
+        }
+      }
+    }
+  } else if (leftHandCalibrationState === 'awaiting_flat') {
+    calHoldSeconds = 0;
+    calSampleAngles.length = 0;
+    setCalibrationBar(0);
+  }
+
+  if (leftHandCalibrationState === 'done' && !handHasLeftKnuckle) {
+    leftKnuckleAngleSmoothedInit = false;
+  }
+
   handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
 }
 
@@ -426,10 +688,18 @@ async function initHandTracking() {
     });
     handVideo.srcObject = stream;
     await handVideo.play();
+    leftHandCalibrationState = 'awaiting_flat';
+    calMsgEl.textContent =
+      'Hold your LEFT hand flat, palm toward the camera, steady for 1 second.';
     handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
   } catch (err) {
     console.warn('Hand tracking unavailable, using mouse for speed only:', err);
     handLandmarker = null;
+    leftHandCalibrationState = 'skipped';
+    handPreviewWrap.style.display = 'none';
+    calMsgEl.textContent =
+      'Camera or hand tracking unavailable. Corridor roll is disabled.';
+    setTimeout(hideCalibrationOverlay, 3200);
   }
 }
 
@@ -465,8 +735,27 @@ function animate() {
     camera.position.z = CAMERA_START_Z;
   }
 
-  /** Left edge => +roll (anticlockwise down the tunnel in right-handed Z+ view), right => -roll */
-  corridorRoot.rotation.z = CORRIDOR_ROLL_MAX * (0.5 - pointerXNormalized) * 2;
+  /** Corridor roll: knuckle-line tilt vs calibrated neutral (dead zone + smoothing in video path). */
+  let rollTarget = 0;
+  if (leftHandCalibrationState === 'done' && handHasLeftKnuckle) {
+    let d = angleDeltaShortest(
+      leftKnuckleAngleSmoothed,
+      neutralKnuckleAngleRad
+    );
+    const dz = LEFT_ROLL_DEAD_ZONE_RAD;
+    if (Math.abs(d) <= dz) d = 0;
+    else d = Math.sign(d) * (Math.abs(d) - dz);
+    rollTarget =
+      CORRIDOR_ROLL_MAX *
+      THREE.MathUtils.clamp(d / LEFT_ROLL_MAX_TILT_RAD, -1, 1);
+  }
+
+  corridorRollSmoothed = THREE.MathUtils.lerp(
+    corridorRollSmoothed,
+    rollTarget,
+    Math.min(1, dt * 20)
+  );
+  corridorRoot.rotation.z = corridorRollSmoothed;
 
   camera.position.x = 0;
   camera.position.y = EYE_HEIGHT;
