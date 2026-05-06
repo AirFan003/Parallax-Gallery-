@@ -138,8 +138,8 @@ const GALLERY_DENSE_Z_EXTENT_FR = 0.94;
 const GALLERY_MAX_PANELS = 960;
 
 /**
- * Gallery JPEGs (max ~576px long edge, ~68% JPEG) — width/height match files in /public/gallery
- * for plane aspect; order follows tunnel encounter (see sorted layout specs).
+ * Gallery JPEGs (~576px long edge) — width/height match `/public/gallery/*.jpg` for plane aspect.
+ * Panels cycle through this list along the dense layout (unique images reduce obvious repetition).
  */
 const GALLERY_ITEMS = [
   { url: '/gallery/01.jpg', width: 432, height: 576 },
@@ -174,6 +174,45 @@ const GALLERY_ITEMS = [
   { url: '/gallery/30.jpg', width: 384, height: 576 },
   { url: '/gallery/31.jpg', width: 576, height: 383 },
   { url: '/gallery/32.jpg', width: 576, height: 383 },
+  { url: '/gallery/33.jpg', width: 432, height: 576 },
+  { url: '/gallery/34.jpg', width: 576, height: 432 },
+  { url: '/gallery/35.jpg', width: 576, height: 432 },
+  { url: '/gallery/36.jpg', width: 576, height: 432 },
+  { url: '/gallery/37.jpg', width: 576, height: 432 },
+  { url: '/gallery/38.jpg', width: 432, height: 576 },
+  { url: '/gallery/39.jpg', width: 432, height: 576 },
+  { url: '/gallery/40.jpg', width: 576, height: 432 },
+  { url: '/gallery/41.jpg', width: 432, height: 576 },
+  { url: '/gallery/42.jpg', width: 432, height: 576 },
+  { url: '/gallery/43.jpg', width: 432, height: 576 },
+  { url: '/gallery/44.jpg', width: 432, height: 576 },
+  { url: '/gallery/45.jpg', width: 432, height: 576 },
+  { url: '/gallery/46.jpg', width: 432, height: 576 },
+  { url: '/gallery/47.jpg', width: 432, height: 576 },
+  { url: '/gallery/48.jpg', width: 432, height: 576 },
+  { url: '/gallery/49.jpg', width: 432, height: 576 },
+  { url: '/gallery/50.jpg', width: 432, height: 576 },
+  { url: '/gallery/51.jpg', width: 383, height: 576 },
+  { url: '/gallery/52.jpg', width: 432, height: 576 },
+  { url: '/gallery/53.jpg', width: 432, height: 576 },
+  { url: '/gallery/54.jpg', width: 432, height: 576 },
+  { url: '/gallery/55.jpg', width: 432, height: 576 },
+  { url: '/gallery/56.jpg', width: 432, height: 576 },
+  { url: '/gallery/57.jpg', width: 432, height: 576 },
+  { url: '/gallery/58.jpg', width: 432, height: 576 },
+  { url: '/gallery/59.jpg', width: 432, height: 576 },
+  { url: '/gallery/60.jpg', width: 432, height: 576 },
+  { url: '/gallery/61.jpg', width: 432, height: 576 },
+  { url: '/gallery/62.jpg', width: 432, height: 576 },
+  { url: '/gallery/63.jpg', width: 432, height: 576 },
+  { url: '/gallery/64.jpg', width: 432, height: 576 },
+  { url: '/gallery/65.jpg', width: 432, height: 576 },
+  { url: '/gallery/66.jpg', width: 576, height: 432 },
+  { url: '/gallery/67.jpg', width: 576, height: 384 },
+  { url: '/gallery/68.jpg', width: 432, height: 576 },
+  { url: '/gallery/69.jpg', width: 383, height: 576 },
+  { url: '/gallery/70.jpg', width: 576, height: 432 },
+  { url: '/gallery/71.jpg', width: 432, height: 576 },
 ];
 
 /** Longer edge along tunnel run (floor/ceiling Z or wall Z) — keeps panels readable. */
@@ -190,6 +229,29 @@ function configureGalleryPhotoTexture(tex) {
     GALLERY_TEX_MAX_ANISOTROPY,
     renderer.capabilities.getMaxAnisotropy()
   );
+}
+
+const gallerySharedMaterials = new WeakMap();
+
+function getSharedGalleryMaterial(texture) {
+  let m = gallerySharedMaterials.get(texture);
+  if (!m) {
+    configureGalleryPhotoTexture(texture);
+    texture.repeat.set(1, 1);
+    texture.offset.set(0, 0);
+    m = new THREE.MeshBasicMaterial({
+      map: texture,
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      fog: false,
+      toneMapped: true,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
+    });
+    gallerySharedMaterials.set(texture, m);
+  }
+  return m;
 }
 
 /**
@@ -220,24 +282,71 @@ function applyCoverUVsToPlaneGeometry(geom, imageWidth, imageHeight, planeWidth,
   uv.needsUpdate = true;
 }
 
-const gallerySharedMaterials = new WeakMap();
+/** Stream decals in front of the camera — avoid decoding/uploads for the whole tunnel at once. */
+const GALLERY_STREAM_LOAD_DISTANCE = 92;
+const GALLERY_STREAM_MAX_NEW_PER_FRAME = 2;
+const GALLERY_STREAM_MAX_IN_FLIGHT = 5;
 
-function getSharedGalleryMaterial(texture) {
-  let m = gallerySharedMaterials.get(texture);
-  if (!m) {
-    configureGalleryPhotoTexture(texture);
-    texture.repeat.set(1, 1);
-    texture.offset.set(0, 0);
-    m = new THREE.MeshBasicMaterial({
-      map: texture,
-      color: 0xffffff,
-      side: THREE.DoubleSide,
-      fog: false,
-      toneMapped: true,
+const galleryTextureCache = new Map();
+const galleryStreamPanels = [];
+
+let galleryStreamLoadsInFlight = 0;
+const _galleryWorldPos = new THREE.Vector3();
+const galleryTextureLoadPromises = new Map();
+
+async function getOrLoadGalleryTexture(url) {
+  const cached = galleryTextureCache.get(url);
+  if (cached) return cached;
+  let inflight = galleryTextureLoadPromises.get(url);
+  if (!inflight) {
+    inflight = textureLoader.loadAsync(url).then((tex) => {
+      configureGalleryPhotoTexture(tex);
+      tex.repeat.set(1, 1);
+      tex.offset.set(0, 0);
+      galleryTextureCache.set(url, tex);
+      galleryTextureLoadPromises.delete(url);
+      return tex;
     });
-    gallerySharedMaterials.set(texture, m);
+    galleryTextureLoadPromises.set(url, inflight);
   }
-  return m;
+  return inflight;
+}
+
+function updateGalleryTextureStreaming(cam) {
+  if (!galleryStreamPanels.length) return;
+
+  const candidates = [];
+  for (const p of galleryStreamPanels) {
+    if (p.resolved || p.loading) continue;
+    p.mesh.getWorldPosition(_galleryWorldPos);
+    const d = _galleryWorldPos.distanceTo(cam);
+    if (d < GALLERY_STREAM_LOAD_DISTANCE) candidates.push({ p, d });
+  }
+  candidates.sort((a, b) => a.d - b.d);
+
+  let started = 0;
+  for (const { p } of candidates) {
+    if (started >= GALLERY_STREAM_MAX_NEW_PER_FRAME) break;
+    if (galleryStreamLoadsInFlight >= GALLERY_STREAM_MAX_IN_FLIGHT) break;
+    started += 1;
+    p.loading = true;
+    galleryStreamLoadsInFlight += 1;
+    const { mesh, url, planeW, planeH } = p;
+    (async () => {
+      try {
+        const tex = await getOrLoadGalleryTexture(url);
+        if (mesh.parent && !p.resolved) {
+          finalizeGalleryPhotoMesh(mesh, tex, planeW, planeH);
+          p.resolved = true;
+        }
+      } catch (e) {
+        console.warn('Gallery texture:', url, e);
+      } finally {
+        p.loading = false;
+        galleryStreamLoadsInFlight -= 1;
+      }
+    })();
+  }
 }
 
 function floorCeilingSpansFromPhotoItem(item) {
@@ -459,14 +568,19 @@ function buildDenseGalleryLayoutSpecs() {
   return specs;
 }
 
-/** Textured gallery only — photos cycle to fill dense layout; shared materials per source texture. */
-function addPhotoGalleryPlanes(parent, galleryTextures) {
+/**
+ * Textured gallery — meshes use placeholders until `updateGalleryTextureStreaming` loads
+ * each JPEG when the panel is near the camera (bounded decode/GPU upload per frame).
+ */
+function addPhotoGalleryPlanes(parent) {
+  galleryStreamPanels.length = 0;
+
   const len = CORRIDOR_LENGTH;
   const h = CORRIDOR_HEIGHT;
   const midZ = -len / 2;
   const lift = 0.03;
 
-  /** Throw-away material; finalizeGalleryPhotoMesh replaces it. */
+  /** Throw-away material; finalizeGalleryPhotoMesh replaces it after load. */
   function placeholderMaterial() {
     return new THREE.MeshBasicMaterial({
       color: 0x040508,
@@ -475,7 +589,18 @@ function addPhotoGalleryPlanes(parent, galleryTextures) {
     });
   }
 
-  function addFloorPanel(cx, cz, wx, dz, texture) {
+  function registerStreamPanel(mesh, url, planeW, planeH) {
+    galleryStreamPanels.push({
+      mesh,
+      url,
+      planeW,
+      planeH,
+      resolved: false,
+      loading: false,
+    });
+  }
+
+  function addFloorPanel(cx, cz, wx, dz, url) {
     const geo = new THREE.PlaneGeometry(wx, dz);
     const mesh = new THREE.Mesh(geo, placeholderMaterial());
     mesh.rotation.x = -Math.PI / 2;
@@ -487,11 +612,11 @@ function addPhotoGalleryPlanes(parent, galleryTextures) {
     );
     mesh.position.set(cxn, -h / 2 + lift, cz - midZ);
     mesh.renderOrder = 1;
-    finalizeGalleryPhotoMesh(mesh, texture, wx, dz);
     parent.add(mesh);
+    registerStreamPanel(mesh, url, wx, dz);
   }
 
-  function addCeilingPanel(cx, cz, wx, dz, texture) {
+  function addCeilingPanel(cx, cz, wx, dz, url) {
     const geo = new THREE.PlaneGeometry(wx, dz);
     const mesh = new THREE.Mesh(geo, placeholderMaterial());
     mesh.rotation.x = Math.PI / 2;
@@ -503,58 +628,57 @@ function addPhotoGalleryPlanes(parent, galleryTextures) {
     );
     mesh.position.set(cxn, h / 2 - lift, cz - midZ);
     mesh.renderOrder = 1;
-    finalizeGalleryPhotoMesh(mesh, texture, wx, dz);
     parent.add(mesh);
+    registerStreamPanel(mesh, url, wx, dz);
   }
 
-  function addLeftWallPanel(cy, cz, dy, dz, texture) {
+  function addLeftWallPanel(cy, cz, dy, dz, url) {
     const hy = dy / 2;
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), placeholderMaterial());
     mesh.rotation.y = Math.PI / 2;
     mesh.position.set(-CORRIDOR_HALF_WIDTH + lift, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
-    finalizeGalleryPhotoMesh(mesh, texture, dz, dy);
     parent.add(mesh);
+    registerStreamPanel(mesh, url, dz, dy);
   }
 
-  function addRightWallPanel(cy, cz, dy, dz, texture) {
+  function addRightWallPanel(cy, cz, dy, dz, url) {
     const hy = dy / 2;
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), placeholderMaterial());
     mesh.rotation.y = -Math.PI / 2;
     mesh.position.set(CORRIDOR_HALF_WIDTH - lift, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
-    finalizeGalleryPhotoMesh(mesh, texture, dz, dy);
     parent.add(mesh);
+    registerStreamPanel(mesh, url, dz, dy);
   }
 
   const specs = buildDenseGalleryLayoutSpecs();
   specs.sort((a, b) => b.cz - a.cz);
 
-  const numTex = galleryTextures.length;
-  if (numTex === 0) return;
+  if (!GALLERY_ITEMS.length) return;
 
   const nItem = GALLERY_ITEMS.length;
   const n = Math.min(specs.length, GALLERY_MAX_PANELS);
 
   for (let i = 0; i < n; i += 1) {
     const s = specs[i];
-    const tex = galleryTextures[i % numTex];
     const item = GALLERY_ITEMS[i % nItem];
+    const url = item.url;
     if (s.kind === 'floor') {
       const { wx, dz } = floorCeilingSpansFromPhotoItem(item);
-      addFloorPanel(s.cx, s.cz, wx, dz, tex);
+      addFloorPanel(s.cx, s.cz, wx, dz, url);
     } else if (s.kind === 'ceiling') {
       const { wx, dz } = floorCeilingSpansFromPhotoItem(item);
-      addCeilingPanel(s.cx, s.cz, wx, dz, tex);
+      addCeilingPanel(s.cx, s.cz, wx, dz, url);
     } else {
       let { dz: wdz, dy } = wallSpansFromPhotoItem(item);
       const fitted = clampWallPhotoSpansToCorridor(s.cy, dy, wdz);
       dy = fitted.dy;
       wdz = fitted.dz;
-      if (s.kind === 'left') addLeftWallPanel(s.cy, s.cz, dy, wdz, tex);
-      else addRightWallPanel(s.cy, s.cz, dy, wdz, tex);
+      if (s.kind === 'left') addLeftWallPanel(s.cy, s.cz, dy, wdz, url);
+      else addRightWallPanel(s.cy, s.cz, dy, wdz, url);
     }
   }
 }
@@ -562,15 +686,7 @@ function addPhotoGalleryPlanes(parent, galleryTextures) {
 addCorridor(corridorRoot);
 
 async function startExperience() {
-  try {
-    const galleryTextures = await Promise.all(
-      GALLERY_ITEMS.map((it) => textureLoader.loadAsync(it.url))
-    );
-    addPhotoGalleryPlanes(corridorRoot, galleryTextures);
-  } catch (err) {
-    console.warn('Could not load gallery images; continuing without photo panels.', err);
-    addPhotoGalleryPlanes(corridorRoot, []);
-  }
+  addPhotoGalleryPlanes(corridorRoot);
   animate();
 }
 
@@ -1010,6 +1126,8 @@ function animate() {
   for (const m of gridMaterials) {
     m.uniforms.uCameraWorldPos.value.set(cam.x, cam.y, cam.z);
   }
+
+  updateGalleryTextureStreaming(cam);
 
   renderer.render(scene, camera);
 }
