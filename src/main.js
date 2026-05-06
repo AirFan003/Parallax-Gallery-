@@ -14,8 +14,16 @@ const SELFIE_MIRROR_FOR_INFERENCE = true;
 /** MediaPipe hand landmarks (right hand only for controls) */
 const WRIST = 0;
 const INDEX_FINGER_MCP = 5;
+const INDEX_FINGER_PIP = 6;
+const INDEX_FINGER_TIP = 8;
+const MIDDLE_FINGER_MCP = 9;
+const MIDDLE_FINGER_PIP = 10;
+const RING_FINGER_PIP = 14;
+const RING_FINGER_TIP = 16;
+const PINKY_PIP = 18;
 const PINKY_MCP = 17;
 const MIDDLE_FINGER_TIP = 12;
+const PINKY_TIP = 20;
 
 /** Exponential smoothing on knuckle angle — higher = less jitter, slower palm follow */
 const RIGHT_KNUCKLE_ANGLE_SMOOTH_ALPHA = 0.92;
@@ -92,6 +100,62 @@ function rightHandProximitySpan(lm) {
   const tip = lm[MIDDLE_FINGER_TIP];
   if (!w || !tip) return null;
   return Math.hypot(tip.x - w.x, tip.y - w.y);
+}
+
+function lmDist3(a, b) {
+  const dz = (a.z ?? 0) - (b.z ?? 0);
+  return Math.hypot(a.x - b.x, a.y - b.y, dz);
+}
+
+/** Low curl ≈ fist; uses 3D distances so palm-at-camera isn’t always “fist”. */
+function rightHandFistCurlRatio(lm) {
+  const tips = [
+    INDEX_FINGER_TIP,
+    MIDDLE_FINGER_TIP,
+    RING_FINGER_TIP,
+    PINKY_TIP,
+  ];
+  const pips = [
+    INDEX_FINGER_PIP,
+    MIDDLE_FINGER_PIP,
+    RING_FINGER_PIP,
+    PINKY_PIP,
+  ];
+  let sum = 0;
+  for (let i = 0; i < 4; i++) {
+    const t = lm[tips[i]];
+    const pip = lm[pips[i]];
+    if (!t || !pip) return null;
+    sum += lmDist3(t, pip);
+  }
+  const w = lm[WRIST];
+  const midMcp = lm[MIDDLE_FINGER_MCP];
+  if (!w || !midMcp) return null;
+  const ref = lmDist3(midMcp, w);
+  if (ref < 0.012) return null;
+  return sum / (4 * ref);
+}
+
+/** Mean(tip→wrist) / (wrist→middle MCP); low when fingers are curled in (fist), higher when open. */
+function rightHandTipSpreadToWristRatio(lm) {
+  const w = lm[WRIST];
+  const midMcp = lm[MIDDLE_FINGER_MCP];
+  if (!w || !midMcp) return null;
+  const ref = lmDist3(midMcp, w);
+  if (ref < 0.012) return null;
+  const tips = [
+    INDEX_FINGER_TIP,
+    MIDDLE_FINGER_TIP,
+    RING_FINGER_TIP,
+    PINKY_TIP,
+  ];
+  let sum = 0;
+  for (const ix of tips) {
+    const t = lm[ix];
+    if (!t) return null;
+    sum += lmDist3(t, w);
+  }
+  return sum / (4 * ref);
 }
 
 const scene = new THREE.Scene();
@@ -225,10 +289,16 @@ const MAX_GALLERY_PHOTO_ALONG_Z = 2.55;
 /** Off the corridor shell — too shallow ⇒ z-fight with the grid under roll. */
 const GALLERY_SURFACE_LIFT = 0.065;
 /**
- * Per-slot bias along each panel’s outward normal. Dense layouts stack many large quads
- * on almost the same plane; without this they flicker even with polygonOffset.
+ * Tiny random offset along each surface’s outward normal (±). Monotonic per-slot bias
+ * incorrectly stacked later panels toward the camera, so dark placeholders could sit
+ * on top of loaded photos in overlapping layouts.
  */
-const GALLERY_PANEL_DEPTH_EPS = 2.8e-5;
+const GALLERY_PANEL_NORMAL_JITTER = 0.0065;
+
+function gallerySurfaceSeparation(slot) {
+  const u = (Math.imul(slot + 1, 116129781) >>> 0) / 2 ** 32;
+  return (u - 0.5) * 2 * GALLERY_PANEL_NORMAL_JITTER;
+}
 
 function configureGalleryPhotoTexture(tex) {
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -254,7 +324,7 @@ function getSharedGalleryMaterial(texture) {
     m = new THREE.MeshBasicMaterial({
       map: texture,
       color: 0xffffff,
-      side: THREE.FrontSide,
+      side: THREE.DoubleSide,
       fog: false,
       toneMapped: true,
     });
@@ -293,15 +363,54 @@ function applyCoverUVsToPlaneGeometry(geom, imageWidth, imageHeight, planeWidth,
 
 /** Stream decals in front of the camera — avoid decoding/uploads for the whole tunnel at once. */
 const GALLERY_STREAM_LOAD_DISTANCE = 118;
-const GALLERY_STREAM_MAX_NEW_PER_FRAME = 2;
-const GALLERY_STREAM_MAX_IN_FLIGHT = 5;
+const GALLERY_STREAM_MAX_NEW_PER_FRAME = 3;
+const GALLERY_STREAM_MAX_IN_FLIGHT = 6;
+
+/** Fist “grab” — curl must stay below this (see `rightHandFistCurlRatio`) */
+const FIST_CURL_GRAB = 0.58;
+/** Open curl — release pop */
+const FIST_CURL_RELEASE = 0.78;
+/** Also require fingertips pulled in toward wrist (ratio); open palm stays above this */
+const FIST_TIP_WRIST_RATIO_GRAB = 1.14;
+/** Fingers extended — release pop */
+const FIST_TIP_WRIST_RATIO_RELEASE = 1.38;
+const GALLERY_FIST_FOCUS_COUNT = 3;
+const GALLERY_FIST_IN_VIEW_DOT = 0.18;
+const GALLERY_FOCUS_DISTANCE = 7.25;
+const GALLERY_FOCUS_HORIZONTAL_SPREAD = 3.85;
+const GALLERY_FOCUS_BLEND_LAMBDA = 7.2;
+/** Only run fist curl ML math every N video frames */
+const FIST_SAMPLE_EVERY_N_FRAMES = 5;
+const FIST_GRAB_HOLD_MS = 300;
+const FIST_PULL_COOLDOWN_MS = 2000;
 
 const galleryTextureCache = new Map();
 const galleryStreamPanels = [];
 
+const galleryFocusPinned = [];
+let galleryFistLatched = false;
+let galleryFistLastPullMs = 0;
+let galleryFocusBlend = 0;
+let fistCurlLastSample = null;
+let fistSpreadLastSample = null;
+let fistHoldStartMs = null;
+let fistMlFrameCounter = 0;
+
 let galleryStreamLoadsInFlight = 0;
-const _galleryWorldPos = new THREE.Vector3();
 const galleryTextureLoadPromises = new Map();
+
+const _gfFwd = new THREE.Vector3();
+const _gfRight = new THREE.Vector3();
+const _gfToCam = new THREE.Vector3();
+const _gfWorldTarget = new THREE.Vector3();
+const _gfLocalTarget = new THREE.Vector3();
+const _gfWorldQuat = new THREE.Quaternion();
+const _gfParentQuat = new THREE.Quaternion();
+const _gfInvParentQuat = new THREE.Quaternion();
+const _gfLocalQuat = new THREE.Quaternion();
+const _gfPlaneNormal = new THREE.Vector3(0, 0, 1);
+const _corridorLocalCam = new THREE.Vector3();
+const _forwardLocal = new THREE.Vector3();
 
 async function getOrLoadGalleryTexture(url) {
   const cached = galleryTextureCache.get(url);
@@ -324,17 +433,22 @@ async function getOrLoadGalleryTexture(url) {
 function updateGalleryTextureStreaming(cam) {
   if (!galleryStreamPanels.length) return;
 
-  const candidates = [];
+  _corridorLocalCam.copy(cam);
+  corridorRoot.worldToLocal(_corridorLocalCam);
+
+  const maxDSq = GALLERY_STREAM_LOAD_DISTANCE * GALLERY_STREAM_LOAD_DISTANCE;
+  const pool = [];
   for (const p of galleryStreamPanels) {
     if (p.resolved || p.loading) continue;
-    p.mesh.getWorldPosition(_galleryWorldPos);
-    const d = _galleryWorldPos.distanceTo(cam);
-    if (d < GALLERY_STREAM_LOAD_DISTANCE) candidates.push({ p, d });
+    const dSq = p.mesh.position.distanceToSquared(_corridorLocalCam);
+    if (dSq >= maxDSq) continue;
+    pool.push({ p, d: Math.sqrt(dSq) });
   }
-  candidates.sort((a, b) => a.d - b.d);
+  if (!pool.length) return;
+  pool.sort((a, b) => a.d - b.d);
 
   let started = 0;
-  for (const { p } of candidates) {
+  for (const { p } of pool) {
     if (started >= GALLERY_STREAM_MAX_NEW_PER_FRAME) break;
     if (galleryStreamLoadsInFlight >= GALLERY_STREAM_MAX_IN_FLIGHT) break;
     started += 1;
@@ -345,7 +459,7 @@ function updateGalleryTextureStreaming(cam) {
       try {
         const tex = await getOrLoadGalleryTexture(url);
         if (mesh.parent && !p.resolved) {
-          finalizeGalleryPhotoMesh(mesh, tex, planeW, planeH, p.depthSlot);
+          finalizeGalleryPhotoMesh(mesh, tex, planeW, planeH);
           p.resolved = true;
         }
       } catch (e) {
@@ -355,6 +469,126 @@ function updateGalleryTextureStreaming(cam) {
         galleryStreamLoadsInFlight -= 1;
       }
     })();
+  }
+}
+
+function pickGalleryFocusPanels() {
+  galleryFocusPinned.length = 0;
+  if (!galleryStreamPanels.length) return;
+
+  camera.getWorldDirection(_gfFwd);
+  corridorRoot.getWorldQuaternion(_gfParentQuat);
+  _gfInvParentQuat.copy(_gfParentQuat).invert();
+  _forwardLocal.copy(_gfFwd).applyQuaternion(_gfInvParentQuat);
+
+  _corridorLocalCam.copy(camera.position);
+  corridorRoot.worldToLocal(_corridorLocalCam);
+
+  const poolIn = [];
+  const poolAll = [];
+
+  for (const panel of galleryStreamPanels) {
+    const m = panel.mesh;
+    _gfToCam.subVectors(m.position, _corridorLocalCam);
+    const dist = _gfToCam.length();
+    if (dist < 1.05 || dist > 92) continue;
+    _gfToCam.multiplyScalar(1 / Math.max(dist, 1e-6));
+    const inView = _forwardLocal.dot(_gfToCam) >= GALLERY_FIST_IN_VIEW_DOT;
+    const entry = { p: panel, d: dist };
+    poolAll.push(entry);
+    if (inView) poolIn.push(entry);
+  }
+
+  poolIn.sort((a, b) => a.d - b.d);
+  poolAll.sort((a, b) => a.d - b.d);
+
+  const picked = new Set();
+  for (const { p } of poolIn) {
+    if (galleryFocusPinned.length >= GALLERY_FIST_FOCUS_COUNT) break;
+    if (!p || picked.has(p)) continue;
+    galleryFocusPinned.push(p);
+    picked.add(p);
+  }
+  for (const { p } of poolAll) {
+    if (galleryFocusPinned.length >= GALLERY_FIST_FOCUS_COUNT) break;
+    if (!p || picked.has(p)) continue;
+    galleryFocusPinned.push(p);
+    picked.add(p);
+  }
+}
+
+function updateGalleryFocusPop(dt, cam) {
+  const goal = galleryFistLatched ? 1 : 0;
+  galleryFocusBlend = THREE.MathUtils.lerp(
+    galleryFocusBlend,
+    goal,
+    1 - Math.exp(-GALLERY_FOCUS_BLEND_LAMBDA * dt)
+  );
+  if (!galleryFocusPinned.length) return;
+
+  if (!galleryFistLatched && galleryFocusBlend < 0.02) {
+    for (const p of galleryFocusPinned) {
+      p.mesh.position.copy(p.restPos);
+      p.mesh.quaternion.copy(p.restQuat);
+      p.mesh.scale.setScalar(1);
+      p.mesh.renderOrder = 1;
+      p.mesh.visible = p.resolved;
+    }
+    galleryFocusPinned.length = 0;
+    galleryFocusBlend = 0;
+    return;
+  }
+
+  camera.getWorldDirection(_gfFwd);
+  _gfRight.crossVectors(_gfFwd, camera.up).normalize();
+  if (_gfRight.lengthSq() < 1e-8) _gfRight.set(1, 0, 0);
+
+  corridorRoot.getWorldQuaternion(_gfParentQuat);
+
+  const n = galleryFocusPinned.length;
+
+  for (let i = 0; i < n; i++) {
+    const p = galleryFocusPinned[i];
+    const slot = i - (n - 1) * 0.5;
+    _gfWorldTarget
+      .copy(cam)
+      .addScaledVector(_gfFwd, GALLERY_FOCUS_DISTANCE)
+      .addScaledVector(_gfRight, slot * GALLERY_FOCUS_HORIZONTAL_SPREAD);
+
+    corridorRoot.worldToLocal(_gfLocalTarget.copy(_gfWorldTarget));
+    _gfToCam.copy(cam).sub(_gfWorldTarget).normalize();
+    if (_gfToCam.lengthSq() < 1e-8) _gfToCam.copy(_gfFwd).negate();
+    _gfWorldQuat.setFromUnitVectors(_gfPlaneNormal, _gfToCam);
+    if (
+      !Number.isFinite(_gfWorldQuat.x) ||
+      !Number.isFinite(_gfWorldQuat.w)
+    ) {
+      _gfLocalQuat.copy(p.restQuat);
+    } else {
+      _gfLocalQuat.copy(_gfParentQuat).invert().multiply(_gfWorldQuat);
+    }
+
+    THREE.Quaternion.slerpQuaternions(
+      p.restQuat,
+      _gfLocalQuat,
+      galleryFocusBlend,
+      p.mesh.quaternion
+    );
+    if (!Number.isFinite(p.mesh.quaternion.w)) {
+      p.mesh.quaternion.copy(p.restQuat);
+    }
+    p.mesh.position.lerpVectors(
+      p.restPos,
+      _gfLocalTarget,
+      galleryFocusBlend
+    );
+    if (!Number.isFinite(p.mesh.position.x)) {
+      p.mesh.position.copy(p.restPos);
+    }
+    const sc = THREE.MathUtils.lerp(1, 1.09, galleryFocusBlend);
+    p.mesh.scale.setScalar(sc);
+    p.mesh.renderOrder = 1 + Math.round(galleryFocusBlend * 4);
+    p.mesh.visible = galleryFocusBlend > 0.04 || p.resolved;
   }
 }
 
@@ -394,25 +628,18 @@ function clampWallPhotoSpansToCorridor(cy, dy, dz) {
   return { dy: dy * s, dz: dz * s };
 }
 
-function finalizeGalleryPhotoMesh(
-  mesh,
-  texture,
-  planeWidth,
-  planeHeight,
-  depthSlot = 0
-) {
+function finalizeGalleryPhotoMesh(mesh, texture, planeWidth, planeHeight) {
   const img = texture.image;
-  const iw = img.naturalWidth || img.width;
-  const ih = img.naturalHeight || img.height;
+  const iw = Math.max(1, img.naturalWidth || img.width || 1);
+  const ih = Math.max(1, img.naturalHeight || img.height || 1);
   applyCoverUVsToPlaneGeometry(mesh.geometry, iw, ih, planeWidth, planeHeight);
   mesh.material.dispose();
   const base = getSharedGalleryMaterial(texture);
   const m = base.clone();
-  const o = 0.6 + (depthSlot % 36) * 0.22;
-  m.polygonOffset = true;
-  m.polygonOffsetFactor = o;
-  m.polygonOffsetUnits = o;
+  m.side = THREE.DoubleSide;
+  m.polygonOffset = false;
   mesh.material = m;
+  mesh.visible = true;
 }
 
 const lookDist = 28;
@@ -604,10 +831,10 @@ function addPhotoGalleryPlanes(parent) {
   /** Throw-away material; finalizeGalleryPhotoMesh replaces it after load. */
   function placeholderMaterial() {
     return new THREE.MeshBasicMaterial({
-      color: 0x040508,
+      color: 0x1a1d24,
       toneMapped: false,
       fog: false,
-      side: THREE.FrontSide,
+      side: THREE.DoubleSide,
     });
   }
 
@@ -620,12 +847,14 @@ function addPhotoGalleryPlanes(parent) {
       depthSlot,
       resolved: false,
       loading: false,
+      restPos: new THREE.Vector3().copy(mesh.position),
+      restQuat: new THREE.Quaternion().copy(mesh.quaternion),
     });
   }
 
   function addFloorPanel(cx, cz, wx, dz, url) {
     const depthSlot = galleryStreamPanels.length;
-    const normalBias = depthSlot * GALLERY_PANEL_DEPTH_EPS;
+    const sep = gallerySurfaceSeparation(depthSlot);
     const geo = new THREE.PlaneGeometry(wx, dz);
     const mesh = new THREE.Mesh(geo, placeholderMaterial());
     mesh.rotation.x = -Math.PI / 2;
@@ -635,15 +864,16 @@ function addPhotoGalleryPlanes(parent) {
       -CORRIDOR_HALF_WIDTH + hx + 0.02,
       CORRIDOR_HALF_WIDTH - hx - 0.02
     );
-    mesh.position.set(cxn, -h / 2 + lift + normalBias, cz - midZ);
+    mesh.position.set(cxn, -h / 2 + lift + sep, cz - midZ);
     mesh.renderOrder = 1;
+    mesh.visible = false;
     parent.add(mesh);
     registerStreamPanel(mesh, url, wx, dz, depthSlot);
   }
 
   function addCeilingPanel(cx, cz, wx, dz, url) {
     const depthSlot = galleryStreamPanels.length;
-    const normalBias = depthSlot * GALLERY_PANEL_DEPTH_EPS;
+    const sep = gallerySurfaceSeparation(depthSlot);
     const geo = new THREE.PlaneGeometry(wx, dz);
     const mesh = new THREE.Mesh(geo, placeholderMaterial());
     mesh.rotation.x = Math.PI / 2;
@@ -653,34 +883,37 @@ function addPhotoGalleryPlanes(parent) {
       -CORRIDOR_HALF_WIDTH + hx + 0.02,
       CORRIDOR_HALF_WIDTH - hx - 0.02
     );
-    mesh.position.set(cxn, h / 2 - lift - normalBias, cz - midZ);
+    mesh.position.set(cxn, h / 2 - lift + sep, cz - midZ);
     mesh.renderOrder = 1;
+    mesh.visible = false;
     parent.add(mesh);
     registerStreamPanel(mesh, url, wx, dz, depthSlot);
   }
 
   function addLeftWallPanel(cy, cz, dy, dz, url) {
     const depthSlot = galleryStreamPanels.length;
-    const normalBias = depthSlot * GALLERY_PANEL_DEPTH_EPS;
+    const sep = gallerySurfaceSeparation(depthSlot);
     const hy = dy / 2;
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), placeholderMaterial());
     mesh.rotation.y = Math.PI / 2;
-    mesh.position.set(-CORRIDOR_HALF_WIDTH + lift + normalBias, cyn - h / 2, cz - midZ);
+    mesh.position.set(-CORRIDOR_HALF_WIDTH + lift + sep, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
+    mesh.visible = false;
     parent.add(mesh);
     registerStreamPanel(mesh, url, dz, dy, depthSlot);
   }
 
   function addRightWallPanel(cy, cz, dy, dz, url) {
     const depthSlot = galleryStreamPanels.length;
-    const normalBias = depthSlot * GALLERY_PANEL_DEPTH_EPS;
+    const sep = gallerySurfaceSeparation(depthSlot);
     const hy = dy / 2;
     const cyn = THREE.MathUtils.clamp(cy, hy + 0.02, CORRIDOR_HEIGHT - hy - 0.02);
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(dz, dy), placeholderMaterial());
     mesh.rotation.y = -Math.PI / 2;
-    mesh.position.set(CORRIDOR_HALF_WIDTH - lift - normalBias, cyn - h / 2, cz - midZ);
+    mesh.position.set(CORRIDOR_HALF_WIDTH - lift + sep, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
+    mesh.visible = false;
     parent.add(mesh);
     registerStreamPanel(mesh, url, dz, dy, depthSlot);
   }
@@ -1033,6 +1266,54 @@ function onHandLandmarkerVideoFrame(now) {
     rightKnuckleAngleSmoothedInit = false;
   }
 
+  if (rightLm && rightHandCalibrationState === 'done') {
+    fistMlFrameCounter += 1;
+    if (fistMlFrameCounter % FIST_SAMPLE_EVERY_N_FRAMES === 0) {
+      fistCurlLastSample = rightHandFistCurlRatio(rightLm);
+      fistSpreadLastSample = rightHandTipSpreadToWristRatio(rightLm);
+    }
+    const curl = fistCurlLastSample;
+    const spread = fistSpreadLastSample;
+    if (
+      curl != null &&
+      spread != null &&
+      Number.isFinite(curl) &&
+      Number.isFinite(spread)
+    ) {
+      const looksOpen =
+        curl > FIST_CURL_RELEASE || spread > FIST_TIP_WRIST_RATIO_RELEASE;
+      const looksFist =
+        curl < FIST_CURL_GRAB && spread < FIST_TIP_WRIST_RATIO_GRAB;
+      if (looksOpen) {
+        galleryFistLatched = false;
+        fistHoldStartMs = null;
+      } else if (looksFist) {
+        if (fistHoldStartMs == null) fistHoldStartMs = tMs;
+        if (
+          tMs - fistHoldStartMs >= FIST_GRAB_HOLD_MS &&
+          tMs - galleryFistLastPullMs >= FIST_PULL_COOLDOWN_MS
+        ) {
+          pickGalleryFocusPanels();
+          fistHoldStartMs = null;
+          if (galleryFocusPinned.length > 0) {
+            galleryFistLastPullMs = tMs;
+            galleryFistLatched = true;
+          }
+        }
+      } else {
+        fistHoldStartMs = null;
+      }
+    } else {
+      fistHoldStartMs = null;
+    }
+  } else {
+    fistMlFrameCounter = 0;
+    fistCurlLastSample = null;
+    fistSpreadLastSample = null;
+    fistHoldStartMs = null;
+    galleryFistLatched = false;
+  }
+
   handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
 }
 
@@ -1149,7 +1430,6 @@ function animate() {
   );
   corridorRoot.rotation.z = corridorRollSmoothed;
 
-  camera.position.x = 0;
   camera.position.y = EYE_HEIGHT;
   camera.lookAt(0, EYE_HEIGHT, camera.position.z - lookDist);
 
@@ -1159,6 +1439,7 @@ function animate() {
   }
 
   updateGalleryTextureStreaming(cam);
+  updateGalleryFocusPop(dt, cam);
 
   renderer.render(scene, camera);
 }
