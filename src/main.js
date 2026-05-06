@@ -8,7 +8,9 @@ const CORRIDOR_LENGTH = 720;
 /** Camera height as fraction of tunnel height — centered-ish */
 const EYE_HEIGHT = CORRIDOR_HEIGHT * 0.45;
 const CAMERA_START_Z = 3.2;
-const CAMERA_FWD_SPEED = 0.65;
+/** Mouse Y: top of viewport (low clientY) = fast forward, bottom = slow/stop */
+const FWD_SPEED_AT_TOP = 2.0;
+const FWD_SPEED_AT_BOTTOM = 0;
 
 /** World-space grid density (cells per unit) — tuned for Tetris-ish scale */
 const GRID_SCALE = 1.8;
@@ -38,24 +40,34 @@ document.body.appendChild(renderer.domElement);
 
 const lookDist = 28;
 
-function shaderUniforms(face, accent, fillTint) {
+/** Neutral gray grid — slightly subdued so wires feel faint but legible */
+const GRID_LINE_GRAY = new THREE.Color(0xaaaeb9);
+const GRID_SURFACE_FILL = new THREE.Color(0x1a1f29);
+const GRID_SURFACE_TINT = new THREE.Color(0x262c38);
+
+function shaderUniforms(face, lineCol, surfaceFill, surfaceTint) {
   return {
     uFace: { value: face },
-    uAccent: { value: new THREE.Vector3(accent.r, accent.g, accent.b) },
-    uFillTint: { value: new THREE.Vector3(fillTint.r, fillTint.g, fillTint.b) },
-    uLineColor: { value: new THREE.Vector3(0.92, 0.93, 0.98) },
+    uAccent: { value: new THREE.Vector3(surfaceTint.r, surfaceTint.g, surfaceTint.b) },
+    uFillTint: { value: new THREE.Vector3(surfaceFill.r, surfaceFill.g, surfaceFill.b) },
+    uLineColor: { value: new THREE.Vector3(lineCol.r, lineCol.g, lineCol.b) },
+    /** How strongly grid lines tint over base (still gray, readable) */
+    uLineStrength: { value: 0.7 },
+    /** Extra additive lift only on wires so faint screens still resolve */
+    uLineBoost: { value: 0.12 },
     uGridScale: { value: GRID_SCALE },
     uFogColor: { value: new THREE.Vector3(BACKGROUND.r, BACKGROUND.g, BACKGROUND.b) },
-    uFogDensity: { value: 0.038 },
+    uFogDensity: { value: 0.023 },
     uCameraWorldPos: { value: new THREE.Vector3() },
   };
 }
 
-function makeGridMaterial(faceIndex, accentHex, fillTintHex) {
-  const accent = new THREE.Color(accentHex);
-  const fill = new THREE.Color(fillTintHex);
+function makeGridMaterial(faceIndex) {
+  const lineCol = GRID_LINE_GRAY.clone();
+  const fill = GRID_SURFACE_FILL.clone();
+  const tint = GRID_SURFACE_TINT.clone();
   return new THREE.ShaderMaterial({
-    uniforms: shaderUniforms(faceIndex, accent, fill),
+    uniforms: shaderUniforms(faceIndex, lineCol, fill, tint),
     vertexShader: /* glsl */ `
       varying vec3 vWorldPosition;
       varying float vFogDist;
@@ -74,6 +86,8 @@ function makeGridMaterial(faceIndex, accentHex, fillTintHex) {
       uniform vec3 uAccent;
       uniform vec3 uFillTint;
       uniform vec3 uLineColor;
+      uniform float uLineStrength;
+      uniform float uLineBoost;
       uniform float uGridScale;
       uniform int uFace;
       uniform vec3 uFogColor;
@@ -85,7 +99,7 @@ function makeGridMaterial(faceIndex, accentHex, fillTintHex) {
                        length(vec2(dFdx(coord.y), dFdy(coord.y))));
         vec2 gv = fract(coord - 0.5) - 0.5;
         vec2 gAbs = abs(gv);
-        vec2 line = smoothstep(fw * 0.9, fw * 1.4, gAbs);
+        vec2 line = smoothstep(fw * 0.55, fw * 1.12, gAbs);
         float m = 1.0 - min(line.x, line.y);
         return m;
       }
@@ -101,10 +115,11 @@ function makeGridMaterial(faceIndex, accentHex, fillTintHex) {
         }
 
         float g = gridLine(gc);
-        vec3 fill = uFillTint * 0.35;
-        vec3 base = mix(fill, uAccent * 0.55, 0.22);
-        vec3 col = mix(base, uLineColor, g * 0.88);
-        col += uAccent * g * 0.35;
+        vec3 fill = uFillTint * 0.56;
+        vec3 base = mix(fill, uAccent * 0.45, 0.2);
+        vec3 lineMix = mix(base, uLineColor, g * uLineStrength);
+        vec3 col = lineMix + uLineColor * g * uLineBoost;
+        col += uAccent * g * (uLineStrength * 0.04);
         float fogF = 1.0 - exp(-vFogDist * uFogDensity);
         col = mix(col, uFogColor, fogF);
         gl_FragColor = vec4(col, 1.0);
@@ -114,12 +129,12 @@ function makeGridMaterial(faceIndex, accentHex, fillTintHex) {
   });
 }
 
-/** face: 0 floor, 1 ceiling, 2 left, 3 right */
+/** Same neutral grid on floor, ceiling, and both walls (face selector only differs). */
 const planeMat = {
-  floor: makeGridMaterial(0, 0x28c6e8, 0x020810),
-  ceiling: makeGridMaterial(1, 0xff9a2c, 0x100602),
-  left: makeGridMaterial(2, 0x32f080, 0x020a06),
-  right: makeGridMaterial(3, 0xff3d5c, 0x0a0204),
+  floor: makeGridMaterial(0),
+  ceiling: makeGridMaterial(1),
+  left: makeGridMaterial(2),
+  right: makeGridMaterial(3),
 };
 
 const gridMaterials = [
@@ -304,11 +319,26 @@ function onResize() {
 
 window.addEventListener('resize', onResize);
 
+/** 0 = top of viewport, 1 = bottom — interpolated into forward speed each frame */
+let pointerYNormalized = 0.4;
+
+function onPointerMove(event) {
+  const h = window.innerHeight || 1;
+  pointerYNormalized = THREE.MathUtils.clamp(event.clientY / h, 0, 1);
+}
+
+window.addEventListener('pointermove', onPointerMove, { passive: true });
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
-  camera.position.z -= CAMERA_FWD_SPEED * dt;
+  const fwdSpeed = THREE.MathUtils.lerp(
+    FWD_SPEED_AT_TOP,
+    FWD_SPEED_AT_BOTTOM,
+    pointerYNormalized
+  );
+  camera.position.z -= fwdSpeed * dt;
   if (camera.position.z < -CORRIDOR_LENGTH + 40) {
     camera.position.z = CAMERA_START_Z;
   }
