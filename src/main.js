@@ -11,6 +11,8 @@ const CAMERA_START_Z = 3.2;
 /** Mouse Y: top of viewport (low clientY) = fast forward, bottom = slow/stop */
 const FWD_SPEED_AT_TOP = 2.0;
 const FWD_SPEED_AT_BOTTOM = 0;
+/** Mouse X: hall roll about tunnel axis — left viewport = anticlockwise, right = clockwise */
+const CORRIDOR_ROLL_MAX = THREE.MathUtils.degToRad(52);
 
 /** World-space grid density (cells per unit) — tuned for Tetris-ish scale */
 const GRID_SCALE = 1.8;
@@ -19,6 +21,14 @@ const scene = new THREE.Scene();
 const BACKGROUND = new THREE.Color(0x010104);
 scene.background = BACKGROUND.clone();
 scene.fog = null;
+
+const corridorRoot = new THREE.Group();
+corridorRoot.position.set(
+  0,
+  CORRIDOR_HEIGHT / 2,
+  -CORRIDOR_LENGTH / 2
+);
+scene.add(corridorRoot);
 
 const clock = new THREE.Clock();
 
@@ -141,7 +151,7 @@ const gridMaterials = [
   planeMat.right,
 ];
 
-function addCorridor() {
+function addCorridor(parent) {
   const len = CORRIDOR_LENGTH;
   const w = CORRIDOR_HALF_WIDTH * 2 + 0.04;
   const h = CORRIDOR_HEIGHT;
@@ -149,30 +159,33 @@ function addCorridor() {
   const floorGeo = new THREE.PlaneGeometry(w, len);
   const floor = new THREE.Mesh(floorGeo, planeMat.floor);
   floor.rotation.x = -Math.PI / 2;
-  floor.position.set(0, 0, -len / 2);
-  scene.add(floor);
+  floor.position.set(0, -h / 2, 0);
+  parent.add(floor);
 
   const ceiling = new THREE.Mesh(floorGeo.clone(), planeMat.ceiling);
   ceiling.rotation.x = Math.PI / 2;
-  ceiling.position.set(0, h, -len / 2);
-  scene.add(ceiling);
+  ceiling.position.set(0, h / 2, 0);
+  parent.add(ceiling);
 
   const wallGeo = new THREE.PlaneGeometry(len, h);
   const leftWall = new THREE.Mesh(wallGeo, planeMat.left);
   leftWall.rotation.y = Math.PI / 2;
-  leftWall.position.set(-CORRIDOR_HALF_WIDTH, h / 2, -len / 2);
-  scene.add(leftWall);
+  leftWall.position.set(-CORRIDOR_HALF_WIDTH, 0, 0);
+  parent.add(leftWall);
 
   const rightWall = new THREE.Mesh(wallGeo.clone(), planeMat.right);
   rightWall.rotation.y = -Math.PI / 2;
-  rightWall.position.set(CORRIDOR_HALF_WIDTH, h / 2, -len / 2);
-  scene.add(rightWall);
+  rightWall.position.set(CORRIDOR_HALF_WIDTH, 0, 0);
+  parent.add(rightWall);
 }
 
 /** Grid-aligned pads — light gray only (parity with corridor grid). */
-function addParallaxGlowBlocks() {
+function addParallaxGlowBlocks(parent) {
   const eps = 0.034;
   const cell = 1 / GRID_SCALE;
+  const len = CORRIDOR_LENGTH;
+  const h = CORRIDOR_HEIGHT;
+  const midZ = -len / 2;
 
   function matteGray(hex) {
     const m = new THREE.MeshBasicMaterial({ color: hex });
@@ -196,8 +209,8 @@ function addParallaxGlowBlocks() {
       new THREE.BoxGeometry(gx * cell * 0.91, eps, gz * cell * 0.91),
       slabA
     );
-    mesh.position.set(cxn, eps * 2, cz);
-    scene.add(mesh);
+    mesh.position.set(cxn, eps * 2 - h / 2, cz - midZ);
+    parent.add(mesh);
   }
 
   function flatCeiling(cx, cz, gx, gz) {
@@ -211,8 +224,8 @@ function addParallaxGlowBlocks() {
       new THREE.BoxGeometry(gx * cell * 0.91, eps, gz * cell * 0.91),
       slabB
     );
-    mesh.position.set(cxn, CORRIDOR_HEIGHT - eps * 2, cz);
-    scene.add(mesh);
+    mesh.position.set(cxn, h / 2 - eps * 2, cz - midZ);
+    parent.add(mesh);
   }
 
   function flatLeft(cy, cz, gy, gz) {
@@ -222,8 +235,8 @@ function addParallaxGlowBlocks() {
       new THREE.BoxGeometry(eps, gy * cell * 0.91, gz * cell * 0.91),
       slabC
     );
-    mesh.position.set(-CORRIDOR_HALF_WIDTH + eps * 2, cyn, cz);
-    scene.add(mesh);
+    mesh.position.set(-CORRIDOR_HALF_WIDTH + eps * 2, cyn - h / 2, cz - midZ);
+    parent.add(mesh);
   }
 
   function flatRight(cy, cz, gy, gz) {
@@ -233,8 +246,8 @@ function addParallaxGlowBlocks() {
       new THREE.BoxGeometry(eps, gy * cell * 0.91, gz * cell * 0.91),
       slabC
     );
-    mesh.position.set(CORRIDOR_HALF_WIDTH - eps * 2, cyn, cz);
-    scene.add(mesh);
+    mesh.position.set(CORRIDOR_HALF_WIDTH - eps * 2, cyn - h / 2, cz - midZ);
+    parent.add(mesh);
   }
 
   /** Rows along -Z — mixed faces so parallax keeps cross-passing cues */
@@ -304,8 +317,8 @@ function addParallaxGlowBlocks() {
   for (const fn of Lpairs) fn();
 }
 
-addCorridor();
-addParallaxGlowBlocks();
+addCorridor(corridorRoot);
+addParallaxGlowBlocks(corridorRoot);
 
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -317,10 +330,14 @@ window.addEventListener('resize', onResize);
 
 /** 0 = top of viewport, 1 = bottom — interpolated into forward speed each frame */
 let pointerYNormalized = 0.4;
+/** 0 = left edge, 1 = right — drives corridor roll about tunnel axis */
+let pointerXNormalized = 0.5;
 
 function onPointerMove(event) {
   const h = window.innerHeight || 1;
+  const w = window.innerWidth || 1;
   pointerYNormalized = THREE.MathUtils.clamp(event.clientY / h, 0, 1);
+  pointerXNormalized = THREE.MathUtils.clamp(event.clientX / w, 0, 1);
 }
 
 window.addEventListener('pointermove', onPointerMove, { passive: true });
@@ -338,6 +355,9 @@ function animate() {
   if (camera.position.z < -CORRIDOR_LENGTH + 40) {
     camera.position.z = CAMERA_START_Z;
   }
+
+  /** Left edge => +roll (anticlockwise down the tunnel in right-handed Z+ view), right => -roll */
+  corridorRoot.rotation.z = CORRIDOR_ROLL_MAX * (0.5 - pointerXNormalized) * 2;
 
   camera.position.x = 0;
   camera.position.y = EYE_HEIGHT;
