@@ -300,6 +300,34 @@ function gallerySurfaceSeparation(slot) {
   return (u - 0.5) * 2 * GALLERY_PANEL_NORMAL_JITTER;
 }
 
+/**
+ * object-fit: cover via vertex UVs so many meshes can share one Texture (no per-mesh repeat).
+ * Matches PlaneGeometry(1×1 segment) vertex / uv order from three.js.
+ */
+function applyCoverUVsToPlaneGeometry(geom, imageWidth, imageHeight, planeWidth, planeHeight) {
+  const ia = imageWidth / imageHeight;
+  const pa = planeWidth / planeHeight;
+  let uMin = 0;
+  let uMax = 1;
+  let vMin = 0;
+  let vMax = 1;
+  if (ia > pa) {
+    const rx = pa / ia;
+    uMin = (1 - rx) / 2;
+    uMax = uMin + rx;
+  } else {
+    const ry = ia / pa;
+    vMin = (1 - ry) / 2;
+    vMax = vMin + ry;
+  }
+  const uv = geom.attributes.uv;
+  uv.setXY(0, uMin, vMax);
+  uv.setXY(1, uMax, vMax);
+  uv.setXY(2, uMin, vMin);
+  uv.setXY(3, uMax, vMin);
+  uv.needsUpdate = true;
+}
+
 function configureGalleryPhotoTexture(tex) {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.ClampToEdgeWrapping;
@@ -331,34 +359,6 @@ function getSharedGalleryMaterial(texture) {
     gallerySharedMaterials.set(texture, m);
   }
   return m;
-}
-
-/**
- * object-fit: cover via vertex UVs so many meshes can share one Texture (no per-mesh repeat).
- * Matches PlaneGeometry(1×1 segment) vertex / uv order from three.js.
- */
-function applyCoverUVsToPlaneGeometry(geom, imageWidth, imageHeight, planeWidth, planeHeight) {
-  const ia = imageWidth / imageHeight;
-  const pa = planeWidth / planeHeight;
-  let uMin = 0;
-  let uMax = 1;
-  let vMin = 0;
-  let vMax = 1;
-  if (ia > pa) {
-    const rx = pa / ia;
-    uMin = (1 - rx) / 2;
-    uMax = uMin + rx;
-  } else {
-    const ry = ia / pa;
-    vMin = (1 - ry) / 2;
-    vMax = vMin + ry;
-  }
-  const uv = geom.attributes.uv;
-  uv.setXY(0, uMin, vMax);
-  uv.setXY(1, uMax, vMax);
-  uv.setXY(2, uMin, vMin);
-  uv.setXY(3, uMax, vMin);
-  uv.needsUpdate = true;
 }
 
 /** Stream decals in front of the camera — avoid decoding/uploads for the whole tunnel at once. */
