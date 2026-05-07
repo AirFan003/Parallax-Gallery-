@@ -210,77 +210,45 @@ const GALLERY_MAX_PANELS = 960;
  * Panels cycle through this list along the dense layout (unique images reduce obvious repetition).
  */
 const GALLERY_ITEMS = [
-  { url: '/gallery/01.jpg', width: 432, height: 576 },
-  { url: '/gallery/02.jpg', width: 432, height: 576 },
-  { url: '/gallery/03.jpg', width: 576, height: 432 },
-  { url: '/gallery/04.jpg', width: 432, height: 576 },
+  { url: '/gallery/01.jpg', width: 5712, height: 4284 },
+  { url: '/gallery/02.jpg', width: 4032, height: 3024 },
+  { url: '/gallery/03.jpg', width: 3021, height: 5370 },
+  { url: '/gallery/04.jpg', width: 2268, height: 4032 },
   { url: '/gallery/05.jpg', width: 381, height: 576 },
   { url: '/gallery/06.jpg', width: 576, height: 381 },
   { url: '/gallery/07.jpg', width: 381, height: 576 },
   { url: '/gallery/08.jpg', width: 576, height: 381 },
-  { url: '/gallery/09.jpg', width: 432, height: 576 },
+  { url: '/gallery/09.jpg', width: 4284, height: 5712 },
   { url: '/gallery/10.jpg', width: 324, height: 576 },
-  { url: '/gallery/11.jpg', width: 432, height: 576 },
   { url: '/gallery/12.jpg', width: 432, height: 576 },
-  { url: '/gallery/13.jpg', width: 432, height: 576 },
   { url: '/gallery/14.jpg', width: 576, height: 508 },
-  { url: '/gallery/15.jpg', width: 432, height: 576 },
-  { url: '/gallery/16.jpg', width: 432, height: 576 },
   { url: '/gallery/17.jpg', width: 432, height: 576 },
-  { url: '/gallery/18.jpg', width: 432, height: 576 },
-  { url: '/gallery/19.jpg', width: 432, height: 576 },
-  { url: '/gallery/20.jpg', width: 432, height: 576 },
-  { url: '/gallery/21.jpg', width: 432, height: 576 },
-  { url: '/gallery/22.jpg', width: 432, height: 576 },
-  { url: '/gallery/23.jpg', width: 432, height: 576 },
-  { url: '/gallery/24.jpg', width: 576, height: 432 },
-  { url: '/gallery/25.jpg', width: 576, height: 432 },
-  { url: '/gallery/26.jpg', width: 432, height: 576 },
-  { url: '/gallery/27.jpg', width: 432, height: 576 },
-  { url: '/gallery/28.jpg', width: 576, height: 432 },
   { url: '/gallery/29.jpg', width: 384, height: 576 },
   { url: '/gallery/30.jpg', width: 384, height: 576 },
   { url: '/gallery/31.jpg', width: 576, height: 383 },
   { url: '/gallery/32.jpg', width: 576, height: 383 },
-  { url: '/gallery/33.jpg', width: 432, height: 576 },
-  { url: '/gallery/34.jpg', width: 576, height: 432 },
   { url: '/gallery/35.jpg', width: 576, height: 432 },
-  { url: '/gallery/36.jpg', width: 576, height: 432 },
   { url: '/gallery/37.jpg', width: 576, height: 432 },
-  { url: '/gallery/38.jpg', width: 432, height: 576 },
   { url: '/gallery/39.jpg', width: 432, height: 576 },
   { url: '/gallery/40.jpg', width: 576, height: 432 },
-  { url: '/gallery/41.jpg', width: 432, height: 576 },
-  { url: '/gallery/42.jpg', width: 432, height: 576 },
-  { url: '/gallery/43.jpg', width: 432, height: 576 },
   { url: '/gallery/44.jpg', width: 432, height: 576 },
-  { url: '/gallery/45.jpg', width: 432, height: 576 },
-  { url: '/gallery/46.jpg', width: 432, height: 576 },
-  { url: '/gallery/47.jpg', width: 432, height: 576 },
-  { url: '/gallery/48.jpg', width: 432, height: 576 },
-  { url: '/gallery/49.jpg', width: 432, height: 576 },
-  { url: '/gallery/50.jpg', width: 432, height: 576 },
   { url: '/gallery/51.jpg', width: 383, height: 576 },
-  { url: '/gallery/52.jpg', width: 432, height: 576 },
-  { url: '/gallery/53.jpg', width: 432, height: 576 },
-  { url: '/gallery/54.jpg', width: 432, height: 576 },
   { url: '/gallery/55.jpg', width: 432, height: 576 },
   { url: '/gallery/56.jpg', width: 432, height: 576 },
   { url: '/gallery/57.jpg', width: 432, height: 576 },
   { url: '/gallery/58.jpg', width: 432, height: 576 },
   { url: '/gallery/59.jpg', width: 432, height: 576 },
-  { url: '/gallery/60.jpg', width: 432, height: 576 },
-  { url: '/gallery/61.jpg', width: 432, height: 576 },
-  { url: '/gallery/62.jpg', width: 432, height: 576 },
-  { url: '/gallery/63.jpg', width: 432, height: 576 },
-  { url: '/gallery/64.jpg', width: 432, height: 576 },
   { url: '/gallery/65.jpg', width: 432, height: 576 },
   { url: '/gallery/66.jpg', width: 576, height: 432 },
   { url: '/gallery/67.jpg', width: 576, height: 384 },
-  { url: '/gallery/68.jpg', width: 432, height: 576 },
   { url: '/gallery/69.jpg', width: 383, height: 576 },
   { url: '/gallery/70.jpg', width: 576, height: 432 },
   { url: '/gallery/71.jpg', width: 432, height: 576 },
+  { url: '/gallery/72.jpg', width: 2800, height: 4978 },
+  { url: '/gallery/73.jpg', width: 2268, height: 4032 },
+  { url: '/gallery/74.jpg', width: 3021, height: 5370 },
+  { url: '/gallery/75.jpg', width: 3088, height: 2316 },
+  { url: '/gallery/76.jpg', width: 8064, height: 4536 },
 ];
 
 /** Longer edge along tunnel run (floor/ceiling Z or wall Z) — keeps panels readable. */
@@ -376,7 +344,14 @@ const FIST_TIP_WRIST_RATIO_GRAB = 1.14;
 /** Fingers extended — release pop */
 const FIST_TIP_WRIST_RATIO_RELEASE = 1.38;
 const GALLERY_FIST_FOCUS_COUNT = 3;
-const GALLERY_FIST_IN_VIEW_DOT = 0.18;
+/** Ignore meshes inside this radius (floor/ceiling “at your feet” false positives). */
+const GALLERY_FIST_MIN_DIST = 3.15;
+const GALLERY_FIST_MAX_DIST = 88;
+/**
+ * Cheap hemisphere test: direction(camera → panel) · camera forward.
+ * Frustum does the real “on screen” test; this drops panels mostly behind the camera.
+ */
+const GALLERY_FIST_MIN_FORWARD_DOT = 0.12;
 const GALLERY_FOCUS_DISTANCE = 7.25;
 const GALLERY_FOCUS_HORIZONTAL_SPREAD = 3.85;
 const GALLERY_FOCUS_BLEND_LAMBDA = 7.2;
@@ -390,7 +365,6 @@ const galleryStreamPanels = [];
 
 const galleryFocusPinned = [];
 let galleryFistLatched = false;
-let gallerySpotlightButtonActive = false;
 let galleryFistLastPullMs = 0;
 let galleryFocusBlend = 0;
 let fistCurlLastSample = null;
@@ -408,11 +382,11 @@ const _gfWorldTarget = new THREE.Vector3();
 const _gfLocalTarget = new THREE.Vector3();
 const _gfWorldQuat = new THREE.Quaternion();
 const _gfParentQuat = new THREE.Quaternion();
-const _gfInvParentQuat = new THREE.Quaternion();
 const _gfLocalQuat = new THREE.Quaternion();
 const _gfPlaneNormal = new THREE.Vector3(0, 0, 1);
 const _corridorLocalCam = new THREE.Vector3();
-const _forwardLocal = new THREE.Vector3();
+const _pickFrustum = new THREE.Frustum();
+const _pickFrustumMatrix = new THREE.Matrix4();
 
 async function getOrLoadGalleryTexture(url) {
   const cached = galleryTextureCache.get(url);
@@ -490,68 +464,40 @@ function pickGalleryFocusPanels() {
   galleryFocusPinned.length = 0;
   if (!galleryStreamPanels.length) return;
 
+  corridorRoot.updateMatrixWorld(true);
+  camera.updateMatrixWorld(true);
+
+  _pickFrustumMatrix.multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse
+  );
+  _pickFrustum.setFromProjectionMatrix(_pickFrustumMatrix);
+
   camera.getWorldDirection(_gfFwd);
-  corridorRoot.getWorldQuaternion(_gfParentQuat);
-  _gfInvParentQuat.copy(_gfParentQuat).invert();
-  _forwardLocal.copy(_gfFwd).applyQuaternion(_gfInvParentQuat);
 
-  _corridorLocalCam.copy(camera.position);
-  corridorRoot.worldToLocal(_corridorLocalCam);
-
-  const poolIn = [];
-  const poolAll = [];
-
-  for (const panel of galleryStreamPanels) {
-    const m = panel.mesh;
-    _gfToCam.subVectors(m.position, _corridorLocalCam);
-    const dist = _gfToCam.length();
-    if (dist < 1.05 || dist > 92) continue;
-    _gfToCam.multiplyScalar(1 / Math.max(dist, 1e-6));
-    const inView = _forwardLocal.dot(_gfToCam) >= GALLERY_FIST_IN_VIEW_DOT;
-    const entry = { p: panel, d: dist };
-    poolAll.push(entry);
-    if (inView) poolIn.push(entry);
-  }
-
-  poolIn.sort((a, b) => a.d - b.d);
-  poolAll.sort((a, b) => a.d - b.d);
-
-  const picked = new Set();
-  for (const { p } of poolIn) {
-    if (galleryFocusPinned.length >= GALLERY_FIST_FOCUS_COUNT) break;
-    if (!p || picked.has(p)) continue;
-    galleryFocusPinned.push(p);
-    picked.add(p);
-  }
-  for (const { p } of poolAll) {
-    if (galleryFocusPinned.length >= GALLERY_FIST_FOCUS_COUNT) break;
-    if (!p || picked.has(p)) continue;
-    galleryFocusPinned.push(p);
-    picked.add(p);
-  }
-}
-
-/** When filters exclude everything (rare poses), still pick by pure corridor distance. */
-function pickGalleryClosestPanelsFallback(count = GALLERY_FIST_FOCUS_COUNT) {
-  galleryFocusPinned.length = 0;
-  if (!galleryStreamPanels.length) return;
-  _corridorLocalCam.copy(camera.position);
-  corridorRoot.worldToLocal(_corridorLocalCam);
   const pool = [];
   for (const panel of galleryStreamPanels) {
-    const d = panel.mesh.position.distanceTo(_corridorLocalCam);
-    pool.push({ p: panel, d });
+    const m = panel.mesh;
+    m.getWorldPosition(_gfWorldTarget);
+    _gfToCam.subVectors(_gfWorldTarget, camera.position);
+    const dist = _gfToCam.length();
+    if (dist < GALLERY_FIST_MIN_DIST || dist > GALLERY_FIST_MAX_DIST) continue;
+    _gfToCam.multiplyScalar(1 / Math.max(dist, 1e-6));
+    if (_gfFwd.dot(_gfToCam) < GALLERY_FIST_MIN_FORWARD_DOT) continue;
+    if (!_pickFrustum.intersectsObject(m)) continue;
+    pool.push({ p: panel, d: dist });
   }
+
   pool.sort((a, b) => a.d - b.d);
-  const n = Math.min(count, pool.length);
+  const n = Math.min(GALLERY_FIST_FOCUS_COUNT, pool.length);
   for (let i = 0; i < n; i += 1) {
     galleryFocusPinned.push(pool[i].p);
   }
 }
 
 function updateGalleryFocusPop(dt, cam) {
-  const spotlightOn = galleryFistLatched || gallerySpotlightButtonActive;
-  const goal = spotlightOn ? 1 : 0;
+  const focusPopActive = galleryFistLatched;
+  const goal = focusPopActive ? 1 : 0;
   galleryFocusBlend = THREE.MathUtils.lerp(
     galleryFocusBlend,
     goal,
@@ -559,7 +505,7 @@ function updateGalleryFocusPop(dt, cam) {
   );
   if (!galleryFocusPinned.length) return;
 
-  if (!spotlightOn && galleryFocusBlend < 0.02) {
+  if (!focusPopActive && galleryFocusBlend < 0.02) {
     for (const p of galleryFocusPinned) {
       p.mesh.position.copy(p.restPos);
       p.mesh.quaternion.copy(p.restQuat);
@@ -1298,57 +1244,52 @@ function onHandLandmarkerVideoFrame(now) {
     rightKnuckleAngleSmoothedInit = false;
   }
 
-  if (!gallerySpotlightButtonActive) {
-    if (rightLm && rightHandCalibrationState === 'done') {
-      fistMlFrameCounter += 1;
-      if (fistMlFrameCounter % FIST_SAMPLE_EVERY_N_FRAMES === 0) {
-        fistCurlLastSample = rightHandFistCurlRatio(rightLm);
-        fistSpreadLastSample = rightHandTipSpreadToWristRatio(rightLm);
-      }
-      const curl = fistCurlLastSample;
-      const spread = fistSpreadLastSample;
-      if (
-        curl != null &&
-        spread != null &&
-        Number.isFinite(curl) &&
-        Number.isFinite(spread)
-      ) {
-        const looksOpen =
-          curl > FIST_CURL_RELEASE || spread > FIST_TIP_WRIST_RATIO_RELEASE;
-        const looksFist =
-          curl < FIST_CURL_GRAB && spread < FIST_TIP_WRIST_RATIO_GRAB;
-        if (looksOpen) {
-          galleryFistLatched = false;
+  if (rightLm && rightHandCalibrationState === 'done') {
+    fistMlFrameCounter += 1;
+    if (fistMlFrameCounter % FIST_SAMPLE_EVERY_N_FRAMES === 0) {
+      fistCurlLastSample = rightHandFistCurlRatio(rightLm);
+      fistSpreadLastSample = rightHandTipSpreadToWristRatio(rightLm);
+    }
+    const curl = fistCurlLastSample;
+    const spread = fistSpreadLastSample;
+    if (
+      curl != null &&
+      spread != null &&
+      Number.isFinite(curl) &&
+      Number.isFinite(spread)
+    ) {
+      const looksOpen =
+        curl > FIST_CURL_RELEASE || spread > FIST_TIP_WRIST_RATIO_RELEASE;
+      const looksFist =
+        curl < FIST_CURL_GRAB && spread < FIST_TIP_WRIST_RATIO_GRAB;
+      if (looksOpen) {
+        galleryFistLatched = false;
+        fistHoldStartMs = null;
+      } else if (looksFist) {
+        if (fistHoldStartMs == null) fistHoldStartMs = tMs;
+        if (
+          tMs - fistHoldStartMs >= FIST_GRAB_HOLD_MS &&
+          tMs - galleryFistLastPullMs >= FIST_PULL_COOLDOWN_MS
+        ) {
+          pickGalleryFocusPanels();
           fistHoldStartMs = null;
-        } else if (looksFist) {
-          if (fistHoldStartMs == null) fistHoldStartMs = tMs;
-          if (
-            tMs - fistHoldStartMs >= FIST_GRAB_HOLD_MS &&
-            tMs - galleryFistLastPullMs >= FIST_PULL_COOLDOWN_MS
-          ) {
-            pickGalleryFocusPanels();
-            fistHoldStartMs = null;
-            if (galleryFocusPinned.length > 0) {
-              galleryFistLastPullMs = tMs;
-              galleryFistLatched = true;
-            }
+          if (galleryFocusPinned.length > 0) {
+            galleryFistLastPullMs = tMs;
+            galleryFistLatched = true;
           }
-        } else {
-          fistHoldStartMs = null;
         }
       } else {
         fistHoldStartMs = null;
       }
     } else {
-      fistMlFrameCounter = 0;
-      fistCurlLastSample = null;
-      fistSpreadLastSample = null;
       fistHoldStartMs = null;
-      galleryFistLatched = false;
     }
   } else {
-    galleryFistLatched = false;
+    fistMlFrameCounter = 0;
+    fistCurlLastSample = null;
+    fistSpreadLastSample = null;
     fistHoldStartMs = null;
+    galleryFistLatched = false;
   }
 
   handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
@@ -1398,63 +1339,24 @@ async function initHandTracking() {
 
 void initHandTracking();
 
-const gallerySpotlightBtn = document.createElement('button');
-gallerySpotlightBtn.type = 'button';
-gallerySpotlightBtn.textContent = 'Spotlight';
-Object.assign(gallerySpotlightBtn.style, {
-  position: 'fixed',
-  bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))',
-  right: 'calc(18px + env(safe-area-inset-right, 0px))',
-  /** Above `#hand-calibration` (10000) and `#hand-tracking-preview` (9000) */
-  zIndex: '12000',
-  padding: '10px 18px',
-  borderRadius: '10px',
-  border: '1px solid rgba(255, 255, 255, 0.2)',
-  background: 'rgba(14, 16, 22, 0.88)',
-  color: '#e8eaf0',
-  font: '600 14px system-ui, sans-serif',
-  cursor: 'pointer',
-  pointerEvents: 'auto',
-  boxShadow: '0 8px 28px rgba(0, 0, 0, 0.45)',
-  backdropFilter: 'blur(10px)',
-});
-gallerySpotlightBtn.addEventListener('click', () => {
-  gallerySpotlightButtonActive = !gallerySpotlightButtonActive;
-  gallerySpotlightBtn.textContent = gallerySpotlightButtonActive
-    ? 'Resume gallery'
-    : 'Spotlight';
-  if (gallerySpotlightButtonActive) {
-    galleryFistLatched = false;
-    /** World matrices must match this frame before corridor-local picks & pops. */
-    corridorRoot.updateMatrixWorld(true);
-    camera.updateMatrixWorld(true);
-    galleryFocusBlend = 0;
-    pickGalleryFocusPanels();
-    if (!galleryFocusPinned.length) pickGalleryClosestPanelsFallback();
-  }
-});
-document.body.appendChild(gallerySpotlightBtn);
-
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
   /** Forward speed: right-hand proximity (close = fast), else mouse Y. */
-  if (!gallerySpotlightButtonActive) {
-    if (handHasRightProximity && rightHandCalibrationState === 'done') {
-      const snapP = Math.min(1, dt * 78);
-      handSmoothedProximity01 = THREE.MathUtils.lerp(
-        handSmoothedProximity01,
-        handTargetProximity01,
-        snapP
-      );
-    } else {
-      handSmoothedProximity01 = THREE.MathUtils.lerp(
-        handSmoothedProximity01,
-        0.15,
-        Math.min(1, dt * 12)
-      );
-    }
+  if (handHasRightProximity && rightHandCalibrationState === 'done') {
+    const snapP = Math.min(1, dt * 78);
+    handSmoothedProximity01 = THREE.MathUtils.lerp(
+      handSmoothedProximity01,
+      handTargetProximity01,
+      snapP
+    );
+  } else {
+    handSmoothedProximity01 = THREE.MathUtils.lerp(
+      handSmoothedProximity01,
+      0.15,
+      Math.min(1, dt * 12)
+    );
   }
 
   const proximityForSpeed =
@@ -1478,11 +1380,9 @@ function animate() {
           FWD_SPEED_AT_BOTTOM,
           mouseYNormalized
         );
-  if (!gallerySpotlightButtonActive) {
-    camera.position.z -= fwdSpeed * dt;
-    if (camera.position.z < -CORRIDOR_LENGTH + 40) {
-      camera.position.z = CAMERA_START_Z;
-    }
+  camera.position.z -= fwdSpeed * dt;
+  if (camera.position.z < -CORRIDOR_LENGTH + 40) {
+    camera.position.z = CAMERA_START_Z;
   }
 
   let rollTarget = 0;
@@ -1500,14 +1400,12 @@ function animate() {
       THREE.MathUtils.clamp(d / RIGHT_ROLL_MAX_TILT_RAD, -1, 1);
   }
 
-  if (!gallerySpotlightButtonActive) {
-    const rollEaseT = 1 - Math.exp(-CORRIDOR_ROLL_EASE_LAMBDA * dt);
-    corridorRollSmoothed = THREE.MathUtils.lerp(
-      corridorRollSmoothed,
-      rollTarget,
-      Math.min(1, rollEaseT)
-    );
-  }
+  const rollEaseT = 1 - Math.exp(-CORRIDOR_ROLL_EASE_LAMBDA * dt);
+  corridorRollSmoothed = THREE.MathUtils.lerp(
+    corridorRollSmoothed,
+    rollTarget,
+    Math.min(1, rollEaseT)
+  );
   corridorRoot.rotation.z = corridorRollSmoothed;
 
   camera.position.y = EYE_HEIGHT;
