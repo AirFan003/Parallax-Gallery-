@@ -1,9 +1,16 @@
 import * as THREE from 'three';
+import GALLERY_ITEMS from 'virtual:gallery-items';
 import {
   DrawingUtils,
   FilesetResolver,
   HandLandmarker,
 } from '@mediapipe/tasks-vision';
+
+if (!GALLERY_ITEMS.length) {
+  console.warn(
+    '[gallery] public/gallery has no supported images. Add .jpg, .jpeg, .png, or .webp and restart dev or rebuild.'
+  );
+}
 
 /**
  * Mirror pixels before inference so landmarks match what you see in the preview
@@ -206,51 +213,10 @@ const GALLERY_DENSE_Z_EXTENT_FR = 0.94;
 const GALLERY_MAX_PANELS = 960;
 
 /**
- * Gallery JPEGs (~576px long edge) — width/height match `/public/gallery/*.jpg` for plane aspect.
- * Panels cycle through this list along the dense layout (unique images reduce obvious repetition).
+ * Populated at dev/build from files in `public/gallery/` (see `gallery-scan-plugin.js`).
+ * Supported: `.jpg`, `.jpeg`, `.png`, `.webp`. Drop files there, then restart dev server
+ * or run `npm run build` — aspect ratio comes from each file’s pixel dimensions.
  */
-const GALLERY_ITEMS = [
-  { url: '/gallery/01.jpg', width: 5712, height: 4284 },
-  { url: '/gallery/02.jpg', width: 4032, height: 3024 },
-  { url: '/gallery/03.jpg', width: 3021, height: 5370 },
-  { url: '/gallery/04.jpg', width: 2268, height: 4032 },
-  { url: '/gallery/05.jpg', width: 381, height: 576 },
-  { url: '/gallery/06.jpg', width: 576, height: 381 },
-  { url: '/gallery/07.jpg', width: 381, height: 576 },
-  { url: '/gallery/08.jpg', width: 576, height: 381 },
-  { url: '/gallery/09.jpg', width: 4284, height: 5712 },
-  { url: '/gallery/10.jpg', width: 324, height: 576 },
-  { url: '/gallery/12.jpg', width: 432, height: 576 },
-  { url: '/gallery/14.jpg', width: 576, height: 508 },
-  { url: '/gallery/17.jpg', width: 432, height: 576 },
-  { url: '/gallery/29.jpg', width: 384, height: 576 },
-  { url: '/gallery/30.jpg', width: 384, height: 576 },
-  { url: '/gallery/31.jpg', width: 576, height: 383 },
-  { url: '/gallery/32.jpg', width: 576, height: 383 },
-  { url: '/gallery/35.jpg', width: 576, height: 432 },
-  { url: '/gallery/37.jpg', width: 576, height: 432 },
-  { url: '/gallery/39.jpg', width: 432, height: 576 },
-  { url: '/gallery/40.jpg', width: 576, height: 432 },
-  { url: '/gallery/44.jpg', width: 432, height: 576 },
-  { url: '/gallery/51.jpg', width: 383, height: 576 },
-  { url: '/gallery/55.jpg', width: 432, height: 576 },
-  { url: '/gallery/56.jpg', width: 432, height: 576 },
-  { url: '/gallery/57.jpg', width: 432, height: 576 },
-  { url: '/gallery/58.jpg', width: 432, height: 576 },
-  { url: '/gallery/59.jpg', width: 432, height: 576 },
-  { url: '/gallery/65.jpg', width: 432, height: 576 },
-  { url: '/gallery/66.jpg', width: 576, height: 432 },
-  { url: '/gallery/67.jpg', width: 576, height: 384 },
-  { url: '/gallery/69.jpg', width: 383, height: 576 },
-  { url: '/gallery/70.jpg', width: 576, height: 432 },
-  { url: '/gallery/71.jpg', width: 432, height: 576 },
-  { url: '/gallery/72.jpg', width: 2800, height: 4978 },
-  { url: '/gallery/73.jpg', width: 2268, height: 4032 },
-  { url: '/gallery/74.jpg', width: 3021, height: 5370 },
-  { url: '/gallery/75.jpg', width: 3088, height: 2316 },
-  { url: '/gallery/76.jpg', width: 8064, height: 4536 },
-];
-
 /** Longer edge along tunnel run (floor/ceiling Z or wall Z) — keeps panels readable. */
 const MAX_GALLERY_PHOTO_ALONG_Z = 2.55;
 
