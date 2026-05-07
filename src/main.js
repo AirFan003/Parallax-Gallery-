@@ -339,6 +339,7 @@ function configureGalleryPhotoTexture(tex) {
     GALLERY_TEX_MAX_ANISOTROPY,
     renderer.capabilities.getMaxAnisotropy()
   );
+  tex.needsUpdate = true;
 }
 
 const gallerySharedMaterials = new WeakMap();
@@ -362,9 +363,9 @@ function getSharedGalleryMaterial(texture) {
 }
 
 /** Stream decals in front of the camera — avoid decoding/uploads for the whole tunnel at once. */
-const GALLERY_STREAM_LOAD_DISTANCE = 118;
-const GALLERY_STREAM_MAX_NEW_PER_FRAME = 3;
-const GALLERY_STREAM_MAX_IN_FLIGHT = 6;
+const GALLERY_STREAM_LOAD_DISTANCE = 135;
+const GALLERY_STREAM_MAX_NEW_PER_FRAME = 5;
+const GALLERY_STREAM_MAX_IN_FLIGHT = 10;
 
 /** Fist “grab” — curl must stay below this (see `rightHandFistCurlRatio`) */
 const FIST_CURL_GRAB = 0.58;
@@ -418,14 +419,26 @@ async function getOrLoadGalleryTexture(url) {
   if (cached) return cached;
   let inflight = galleryTextureLoadPromises.get(url);
   if (!inflight) {
-    inflight = textureLoader.loadAsync(url).then((tex) => {
-      configureGalleryPhotoTexture(tex);
-      tex.repeat.set(1, 1);
-      tex.offset.set(0, 0);
-      galleryTextureCache.set(url, tex);
-      galleryTextureLoadPromises.delete(url);
-      return tex;
-    });
+    inflight = textureLoader
+      .loadAsync(url)
+      .then(async (tex) => {
+        const img = tex.image;
+        if (img && typeof img.decode === 'function') {
+          try {
+            await img.decode();
+          } catch {
+            /* decode optional; loader already fired onload */
+          }
+        }
+        configureGalleryPhotoTexture(tex);
+        tex.repeat.set(1, 1);
+        tex.offset.set(0, 0);
+        galleryTextureCache.set(url, tex);
+        return tex;
+      })
+      .finally(() => {
+        galleryTextureLoadPromises.delete(url);
+      });
     galleryTextureLoadPromises.set(url, inflight);
   }
   return inflight;
