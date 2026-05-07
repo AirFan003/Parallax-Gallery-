@@ -389,6 +389,7 @@ const galleryStreamPanels = [];
 
 const galleryFocusPinned = [];
 let galleryFistLatched = false;
+let gallerySpotlightButtonActive = false;
 let galleryFistLastPullMs = 0;
 let galleryFocusBlend = 0;
 let fistCurlLastSample = null;
@@ -517,8 +518,27 @@ function pickGalleryFocusPanels() {
   }
 }
 
+/** When filters exclude everything (rare poses), still pick by pure corridor distance. */
+function pickGalleryClosestPanelsFallback(count = GALLERY_FIST_FOCUS_COUNT) {
+  galleryFocusPinned.length = 0;
+  if (!galleryStreamPanels.length) return;
+  _corridorLocalCam.copy(camera.position);
+  corridorRoot.worldToLocal(_corridorLocalCam);
+  const pool = [];
+  for (const panel of galleryStreamPanels) {
+    const d = panel.mesh.position.distanceTo(_corridorLocalCam);
+    pool.push({ p: panel, d });
+  }
+  pool.sort((a, b) => a.d - b.d);
+  const n = Math.min(count, pool.length);
+  for (let i = 0; i < n; i += 1) {
+    galleryFocusPinned.push(pool[i].p);
+  }
+}
+
 function updateGalleryFocusPop(dt, cam) {
-  const goal = galleryFistLatched ? 1 : 0;
+  const spotlightOn = galleryFistLatched || gallerySpotlightButtonActive;
+  const goal = spotlightOn ? 1 : 0;
   galleryFocusBlend = THREE.MathUtils.lerp(
     galleryFocusBlend,
     goal,
@@ -526,7 +546,7 @@ function updateGalleryFocusPop(dt, cam) {
   );
   if (!galleryFocusPinned.length) return;
 
-  if (!galleryFistLatched && galleryFocusBlend < 0.02) {
+  if (!spotlightOn && galleryFocusBlend < 0.02) {
     for (const p of galleryFocusPinned) {
       p.mesh.position.copy(p.restPos);
       p.mesh.quaternion.copy(p.restQuat);
@@ -568,11 +588,10 @@ function updateGalleryFocusPop(dt, cam) {
       _gfLocalQuat.copy(_gfParentQuat).invert().multiply(_gfWorldQuat);
     }
 
-    THREE.Quaternion.slerpQuaternions(
+    p.mesh.quaternion.slerpQuaternions(
       p.restQuat,
       _gfLocalQuat,
-      galleryFocusBlend,
-      p.mesh.quaternion
+      galleryFocusBlend
     );
     if (!Number.isFinite(p.mesh.quaternion.w)) {
       p.mesh.quaternion.copy(p.restQuat);
@@ -1266,52 +1285,57 @@ function onHandLandmarkerVideoFrame(now) {
     rightKnuckleAngleSmoothedInit = false;
   }
 
-  if (rightLm && rightHandCalibrationState === 'done') {
-    fistMlFrameCounter += 1;
-    if (fistMlFrameCounter % FIST_SAMPLE_EVERY_N_FRAMES === 0) {
-      fistCurlLastSample = rightHandFistCurlRatio(rightLm);
-      fistSpreadLastSample = rightHandTipSpreadToWristRatio(rightLm);
-    }
-    const curl = fistCurlLastSample;
-    const spread = fistSpreadLastSample;
-    if (
-      curl != null &&
-      spread != null &&
-      Number.isFinite(curl) &&
-      Number.isFinite(spread)
-    ) {
-      const looksOpen =
-        curl > FIST_CURL_RELEASE || spread > FIST_TIP_WRIST_RATIO_RELEASE;
-      const looksFist =
-        curl < FIST_CURL_GRAB && spread < FIST_TIP_WRIST_RATIO_GRAB;
-      if (looksOpen) {
-        galleryFistLatched = false;
-        fistHoldStartMs = null;
-      } else if (looksFist) {
-        if (fistHoldStartMs == null) fistHoldStartMs = tMs;
-        if (
-          tMs - fistHoldStartMs >= FIST_GRAB_HOLD_MS &&
-          tMs - galleryFistLastPullMs >= FIST_PULL_COOLDOWN_MS
-        ) {
-          pickGalleryFocusPanels();
+  if (!gallerySpotlightButtonActive) {
+    if (rightLm && rightHandCalibrationState === 'done') {
+      fistMlFrameCounter += 1;
+      if (fistMlFrameCounter % FIST_SAMPLE_EVERY_N_FRAMES === 0) {
+        fistCurlLastSample = rightHandFistCurlRatio(rightLm);
+        fistSpreadLastSample = rightHandTipSpreadToWristRatio(rightLm);
+      }
+      const curl = fistCurlLastSample;
+      const spread = fistSpreadLastSample;
+      if (
+        curl != null &&
+        spread != null &&
+        Number.isFinite(curl) &&
+        Number.isFinite(spread)
+      ) {
+        const looksOpen =
+          curl > FIST_CURL_RELEASE || spread > FIST_TIP_WRIST_RATIO_RELEASE;
+        const looksFist =
+          curl < FIST_CURL_GRAB && spread < FIST_TIP_WRIST_RATIO_GRAB;
+        if (looksOpen) {
+          galleryFistLatched = false;
           fistHoldStartMs = null;
-          if (galleryFocusPinned.length > 0) {
-            galleryFistLastPullMs = tMs;
-            galleryFistLatched = true;
+        } else if (looksFist) {
+          if (fistHoldStartMs == null) fistHoldStartMs = tMs;
+          if (
+            tMs - fistHoldStartMs >= FIST_GRAB_HOLD_MS &&
+            tMs - galleryFistLastPullMs >= FIST_PULL_COOLDOWN_MS
+          ) {
+            pickGalleryFocusPanels();
+            fistHoldStartMs = null;
+            if (galleryFocusPinned.length > 0) {
+              galleryFistLastPullMs = tMs;
+              galleryFistLatched = true;
+            }
           }
+        } else {
+          fistHoldStartMs = null;
         }
       } else {
         fistHoldStartMs = null;
       }
     } else {
+      fistMlFrameCounter = 0;
+      fistCurlLastSample = null;
+      fistSpreadLastSample = null;
       fistHoldStartMs = null;
+      galleryFistLatched = false;
     }
   } else {
-    fistMlFrameCounter = 0;
-    fistCurlLastSample = null;
-    fistSpreadLastSample = null;
-    fistHoldStartMs = null;
     galleryFistLatched = false;
+    fistHoldStartMs = null;
   }
 
   handVideo.requestVideoFrameCallback(onHandLandmarkerVideoFrame);
@@ -1361,24 +1385,63 @@ async function initHandTracking() {
 
 void initHandTracking();
 
+const gallerySpotlightBtn = document.createElement('button');
+gallerySpotlightBtn.type = 'button';
+gallerySpotlightBtn.textContent = 'Spotlight';
+Object.assign(gallerySpotlightBtn.style, {
+  position: 'fixed',
+  bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))',
+  right: 'calc(18px + env(safe-area-inset-right, 0px))',
+  /** Above `#hand-calibration` (10000) and `#hand-tracking-preview` (9000) */
+  zIndex: '12000',
+  padding: '10px 18px',
+  borderRadius: '10px',
+  border: '1px solid rgba(255, 255, 255, 0.2)',
+  background: 'rgba(14, 16, 22, 0.88)',
+  color: '#e8eaf0',
+  font: '600 14px system-ui, sans-serif',
+  cursor: 'pointer',
+  pointerEvents: 'auto',
+  boxShadow: '0 8px 28px rgba(0, 0, 0, 0.45)',
+  backdropFilter: 'blur(10px)',
+});
+gallerySpotlightBtn.addEventListener('click', () => {
+  gallerySpotlightButtonActive = !gallerySpotlightButtonActive;
+  gallerySpotlightBtn.textContent = gallerySpotlightButtonActive
+    ? 'Resume gallery'
+    : 'Spotlight';
+  if (gallerySpotlightButtonActive) {
+    galleryFistLatched = false;
+    /** World matrices must match this frame before corridor-local picks & pops. */
+    corridorRoot.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    galleryFocusBlend = 0;
+    pickGalleryFocusPanels();
+    if (!galleryFocusPinned.length) pickGalleryClosestPanelsFallback();
+  }
+});
+document.body.appendChild(gallerySpotlightBtn);
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
   /** Forward speed: right-hand proximity (close = fast), else mouse Y. */
-  if (handHasRightProximity && rightHandCalibrationState === 'done') {
-    const snapP = Math.min(1, dt * 78);
-    handSmoothedProximity01 = THREE.MathUtils.lerp(
-      handSmoothedProximity01,
-      handTargetProximity01,
-      snapP
-    );
-  } else {
-    handSmoothedProximity01 = THREE.MathUtils.lerp(
-      handSmoothedProximity01,
-      0.15,
-      Math.min(1, dt * 12)
-    );
+  if (!gallerySpotlightButtonActive) {
+    if (handHasRightProximity && rightHandCalibrationState === 'done') {
+      const snapP = Math.min(1, dt * 78);
+      handSmoothedProximity01 = THREE.MathUtils.lerp(
+        handSmoothedProximity01,
+        handTargetProximity01,
+        snapP
+      );
+    } else {
+      handSmoothedProximity01 = THREE.MathUtils.lerp(
+        handSmoothedProximity01,
+        0.15,
+        Math.min(1, dt * 12)
+      );
+    }
   }
 
   const proximityForSpeed =
@@ -1402,9 +1465,11 @@ function animate() {
           FWD_SPEED_AT_BOTTOM,
           mouseYNormalized
         );
-  camera.position.z -= fwdSpeed * dt;
-  if (camera.position.z < -CORRIDOR_LENGTH + 40) {
-    camera.position.z = CAMERA_START_Z;
+  if (!gallerySpotlightButtonActive) {
+    camera.position.z -= fwdSpeed * dt;
+    if (camera.position.z < -CORRIDOR_LENGTH + 40) {
+      camera.position.z = CAMERA_START_Z;
+    }
   }
 
   let rollTarget = 0;
@@ -1422,12 +1487,14 @@ function animate() {
       THREE.MathUtils.clamp(d / RIGHT_ROLL_MAX_TILT_RAD, -1, 1);
   }
 
-  const rollEaseT = 1 - Math.exp(-CORRIDOR_ROLL_EASE_LAMBDA * dt);
-  corridorRollSmoothed = THREE.MathUtils.lerp(
-    corridorRollSmoothed,
-    rollTarget,
-    Math.min(1, rollEaseT)
-  );
+  if (!gallerySpotlightButtonActive) {
+    const rollEaseT = 1 - Math.exp(-CORRIDOR_ROLL_EASE_LAMBDA * dt);
+    corridorRollSmoothed = THREE.MathUtils.lerp(
+      corridorRollSmoothed,
+      rollTarget,
+      Math.min(1, rollEaseT)
+    );
+  }
   corridorRoot.rotation.z = corridorRollSmoothed;
 
   camera.position.y = EYE_HEIGHT;
@@ -1437,6 +1504,9 @@ function animate() {
   for (const m of gridMaterials) {
     m.uniforms.uCameraWorldPos.value.set(cam.x, cam.y, cam.z);
   }
+
+  corridorRoot.updateMatrixWorld(true);
+  camera.updateMatrixWorld(true);
 
   updateGalleryTextureStreaming(cam);
   updateGalleryFocusPop(dt, cam);
