@@ -322,10 +322,15 @@ const GALLERY_FIST_MIN_FORWARD_DOT = 0.12;
  * World-space offset along camera forward for popped panels — keep above `camera.near`
  * plus ~half the largest plane size (~1.3) so billboards don’t clip.
  */
-const GALLERY_FOCUS_DISTANCE = 4.1;
+const GALLERY_FOCUS_DISTANCE = 3.50;
 /** Lateral spacing (meters) between the three slots at the focus plane — tuned for `GALLERY_FOCUS_DISTANCE`. */
-const GALLERY_FOCUS_HORIZONTAL_SPREAD = 2.15;
+const GALLERY_FOCUS_HORIZONTAL_SPREAD = 1.65;
 const GALLERY_FOCUS_BLEND_LAMBDA = 7.2;
+/**
+ * Forward glide + roll responsiveness while fist-focus is held or easing out.
+ * 1 = normal speed; lower = slower drift so quads don’t race past the popped trio.
+ */
+const GALLERY_FOCUS_MOVEMENT_SCALE = 0.28;
 /** Only run fist curl ML math every N video frames */
 const FIST_SAMPLE_EVERY_N_FRAMES = 5;
 const FIST_GRAB_HOLD_MS = 300;
@@ -1066,7 +1071,7 @@ calStyle.textContent = `
   height: 100%;
   width: 0%;
   border-radius: 3px;
-  background: linear-gradient(90deg, #6b8cff, #a78bfa);
+  background: #fff;
   transition: width 0.08s linear;
 }
 #hand-tracking-preview {
@@ -1316,6 +1321,14 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
+  /** Slow glide & roll while fist-focus is active or easing back (full freeze felt unnatural). */
+  const focusMovementSlowT = galleryFistLatched ? 1 : galleryFocusBlend;
+  const galleryFocusMovementScale = THREE.MathUtils.lerp(
+    1,
+    GALLERY_FOCUS_MOVEMENT_SCALE,
+    focusMovementSlowT
+  );
+
   /** Forward speed: right-hand proximity (close = fast), else mouse Y. */
   if (handHasRightProximity && rightHandCalibrationState === 'done') {
     const snapP = Math.min(1, dt * 78);
@@ -1353,7 +1366,7 @@ function animate() {
           FWD_SPEED_AT_BOTTOM,
           mouseYNormalized
         );
-  camera.position.z -= fwdSpeed * dt;
+  camera.position.z -= fwdSpeed * dt * galleryFocusMovementScale;
   if (camera.position.z < -CORRIDOR_LENGTH + 40) {
     camera.position.z = CAMERA_START_Z;
   }
@@ -1377,7 +1390,7 @@ function animate() {
   corridorRollSmoothed = THREE.MathUtils.lerp(
     corridorRollSmoothed,
     rollTarget,
-    Math.min(1, rollEaseT)
+    Math.min(1, rollEaseT * galleryFocusMovementScale)
   );
   corridorRoot.rotation.z = corridorRollSmoothed;
 
