@@ -352,8 +352,13 @@ const GALLERY_FIST_MAX_DIST = 88;
  * Frustum does the real “on screen” test; this drops panels mostly behind the camera.
  */
 const GALLERY_FIST_MIN_FORWARD_DOT = 0.12;
-const GALLERY_FOCUS_DISTANCE = 7.25;
-const GALLERY_FOCUS_HORIZONTAL_SPREAD = 3.85;
+/**
+ * World-space offset along camera forward for popped panels — keep above `camera.near`
+ * plus ~half the largest plane size (~1.3) so billboards don’t clip.
+ */
+const GALLERY_FOCUS_DISTANCE = 4.1;
+/** Lateral spacing (meters) between the three slots at the focus plane — tuned for `GALLERY_FOCUS_DISTANCE`. */
+const GALLERY_FOCUS_HORIZONTAL_SPREAD = 2.15;
 const GALLERY_FOCUS_BLEND_LAMBDA = 7.2;
 /** Only run fist curl ML math every N video frames */
 const FIST_SAMPLE_EVERY_N_FRAMES = 5;
@@ -565,7 +570,9 @@ function updateGalleryFocusPop(dt, cam) {
     }
     const sc = THREE.MathUtils.lerp(1, 1.09, galleryFocusBlend);
     p.mesh.scale.setScalar(sc);
-    p.mesh.renderOrder = 1 + Math.round(galleryFocusBlend * 4);
+    /** Draw after the rest of the corridor/gallery so we don’t sort behind un-popped quads. */
+    p.mesh.renderOrder =
+      2000 + i + Math.round(galleryFocusBlend * 8);
     p.mesh.visible = galleryFocusBlend > 0.04 || p.resolved;
   }
 }
