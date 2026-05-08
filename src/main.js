@@ -1,16 +1,9 @@
 import * as THREE from 'three';
-import GALLERY_ITEMS from 'virtual:gallery-items';
 import {
   DrawingUtils,
   FilesetResolver,
   HandLandmarker,
 } from '@mediapipe/tasks-vision';
-
-if (!GALLERY_ITEMS.length) {
-  console.warn(
-    '[gallery] public/gallery has no supported images. Add .jpg, .jpeg, .png, or .webp and restart dev or rebuild.'
-  );
-}
 
 /**
  * Mirror pixels before inference so landmarks match what you see in the preview
@@ -180,9 +173,21 @@ scene.add(corridorRoot);
 
 const clock = new THREE.Clock();
 
+const galleryStageEl = document.getElementById('gallery-stage');
+if (!galleryStageEl) {
+  throw new Error('index.html must define #gallery-stage.');
+}
+
+function galleryViewSize() {
+  const w = galleryStageEl.clientWidth;
+  const h = galleryStageEl.clientHeight;
+  return { w: Math.max(1, w), h: Math.max(1, h) };
+}
+
+const _gvInitial = galleryViewSize();
 const camera = new THREE.PerspectiveCamera(
   62,
-  window.innerWidth / window.innerHeight,
+  _gvInitial.w / _gvInitial.h,
   0.05,
   3200
 );
@@ -193,30 +198,23 @@ const renderer = new THREE.WebGLRenderer({
   alpha: false,
   logarithmicDepthBuffer: true,
 });
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setSize(_gvInitial.w, _gvInitial.h);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
-document.body.appendChild(renderer.domElement);
+galleryStageEl.appendChild(renderer.domElement);
 
-const textureLoader = new THREE.TextureLoader();
-
-/** Many textured quads — keep sampling cost predictable. */
-const GALLERY_TEX_MAX_ANISOTROPY = 1;
-
-/** Dense strip of photo slots — tight spacing, many faces per step, large prints. */
+/** Dense strip of panel slots — tight spacing, many faces per step, large quads. */
 const GALLERY_DENSE_Z_START = -0.28;
 const GALLERY_RING_STEP = 5.25;
 const GALLERY_DENSE_Z_EXTENT_FR = 0.94;
-/** ~8 panels × rings; cap keeps frame time bounded; photos still cycle. */
+/** ~8 panels × rings; cap keeps frame time bounded. */
 const GALLERY_MAX_PANELS = 960;
 
-/**
- * Populated at dev/build from files in `public/gallery/` (see `gallery-scan-plugin.js`).
- * Supported: `.jpg`, `.jpeg`, `.png`, `.webp`. Drop files there, then restart dev server
- * or run `npm run build` — aspect ratio comes from each file’s pixel dimensions.
- */
+/** Fixed 3:2 aspect for light-gray placeholder quads (not loaded from image files). */
+const PLACEHOLDER_GALLERY_ITEM = { width: 3, height: 2 };
+
 /** Longer edge along tunnel run (floor/ceiling Z or wall Z) — keeps panels readable. */
 const MAX_GALLERY_PHOTO_ALONG_Z = 2.55;
 
@@ -233,73 +231,6 @@ function gallerySurfaceSeparation(slot) {
   const u = (Math.imul(slot + 1, 116129781) >>> 0) / 2 ** 32;
   return (u - 0.5) * 2 * GALLERY_PANEL_NORMAL_JITTER;
 }
-
-/**
- * object-fit: cover via vertex UVs so many meshes can share one Texture (no per-mesh repeat).
- * Matches PlaneGeometry(1×1 segment) vertex / uv order from three.js.
- */
-function applyCoverUVsToPlaneGeometry(geom, imageWidth, imageHeight, planeWidth, planeHeight) {
-  const ia = imageWidth / imageHeight;
-  const pa = planeWidth / planeHeight;
-  let uMin = 0;
-  let uMax = 1;
-  let vMin = 0;
-  let vMax = 1;
-  if (ia > pa) {
-    const rx = pa / ia;
-    uMin = (1 - rx) / 2;
-    uMax = uMin + rx;
-  } else {
-    const ry = ia / pa;
-    vMin = (1 - ry) / 2;
-    vMax = vMin + ry;
-  }
-  const uv = geom.attributes.uv;
-  uv.setXY(0, uMin, vMax);
-  uv.setXY(1, uMax, vMax);
-  uv.setXY(2, uMin, vMin);
-  uv.setXY(3, uMax, vMin);
-  uv.needsUpdate = true;
-}
-
-function configureGalleryPhotoTexture(tex) {
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.anisotropy = Math.min(
-    GALLERY_TEX_MAX_ANISOTROPY,
-    renderer.capabilities.getMaxAnisotropy()
-  );
-  tex.needsUpdate = true;
-}
-
-const gallerySharedMaterials = new WeakMap();
-
-function getSharedGalleryMaterial(texture) {
-  let m = gallerySharedMaterials.get(texture);
-  if (!m) {
-    configureGalleryPhotoTexture(texture);
-    texture.repeat.set(1, 1);
-    texture.offset.set(0, 0);
-    m = new THREE.MeshBasicMaterial({
-      map: texture,
-      color: 0xffffff,
-      side: THREE.DoubleSide,
-      fog: false,
-      toneMapped: true,
-    });
-    gallerySharedMaterials.set(texture, m);
-  }
-  return m;
-}
-
-/** Stream decals in front of the camera — avoid decoding/uploads for the whole tunnel at once. */
-const GALLERY_STREAM_LOAD_DISTANCE = 135;
-const GALLERY_STREAM_MAX_NEW_PER_FRAME = 5;
-const GALLERY_STREAM_MAX_IN_FLIGHT = 10;
 
 /** Fist “grab” — curl must stay below this (see `rightHandFistCurlRatio`) */
 const FIST_CURL_GRAB = 0.58;
@@ -336,7 +267,6 @@ const FIST_SAMPLE_EVERY_N_FRAMES = 5;
 const FIST_GRAB_HOLD_MS = 300;
 const FIST_PULL_COOLDOWN_MS = 2000;
 
-const galleryTextureCache = new Map();
 const galleryStreamPanels = [];
 
 const galleryFocusPinned = [];
@@ -348,9 +278,6 @@ let fistSpreadLastSample = null;
 let fistHoldStartMs = null;
 let fistMlFrameCounter = 0;
 
-let galleryStreamLoadsInFlight = 0;
-const galleryTextureLoadPromises = new Map();
-
 const _gfFwd = new THREE.Vector3();
 const _gfRight = new THREE.Vector3();
 const _gfToCam = new THREE.Vector3();
@@ -360,81 +287,8 @@ const _gfWorldQuat = new THREE.Quaternion();
 const _gfParentQuat = new THREE.Quaternion();
 const _gfLocalQuat = new THREE.Quaternion();
 const _gfPlaneNormal = new THREE.Vector3(0, 0, 1);
-const _corridorLocalCam = new THREE.Vector3();
 const _pickFrustum = new THREE.Frustum();
 const _pickFrustumMatrix = new THREE.Matrix4();
-
-async function getOrLoadGalleryTexture(url) {
-  const cached = galleryTextureCache.get(url);
-  if (cached) return cached;
-  let inflight = galleryTextureLoadPromises.get(url);
-  if (!inflight) {
-    inflight = textureLoader
-      .loadAsync(url)
-      .then(async (tex) => {
-        const img = tex.image;
-        if (img && typeof img.decode === 'function') {
-          try {
-            await img.decode();
-          } catch {
-            /* decode optional; loader already fired onload */
-          }
-        }
-        configureGalleryPhotoTexture(tex);
-        tex.repeat.set(1, 1);
-        tex.offset.set(0, 0);
-        galleryTextureCache.set(url, tex);
-        return tex;
-      })
-      .finally(() => {
-        galleryTextureLoadPromises.delete(url);
-      });
-    galleryTextureLoadPromises.set(url, inflight);
-  }
-  return inflight;
-}
-
-function updateGalleryTextureStreaming(cam) {
-  if (!galleryStreamPanels.length) return;
-
-  _corridorLocalCam.copy(cam);
-  corridorRoot.worldToLocal(_corridorLocalCam);
-
-  const maxDSq = GALLERY_STREAM_LOAD_DISTANCE * GALLERY_STREAM_LOAD_DISTANCE;
-  const pool = [];
-  for (const p of galleryStreamPanels) {
-    if (p.resolved || p.loading) continue;
-    const dSq = p.mesh.position.distanceToSquared(_corridorLocalCam);
-    if (dSq >= maxDSq) continue;
-    pool.push({ p, d: Math.sqrt(dSq) });
-  }
-  if (!pool.length) return;
-  pool.sort((a, b) => a.d - b.d);
-
-  let started = 0;
-  for (const { p } of pool) {
-    if (started >= GALLERY_STREAM_MAX_NEW_PER_FRAME) break;
-    if (galleryStreamLoadsInFlight >= GALLERY_STREAM_MAX_IN_FLIGHT) break;
-    started += 1;
-    p.loading = true;
-    galleryStreamLoadsInFlight += 1;
-    const { mesh, url, planeW, planeH } = p;
-    (async () => {
-      try {
-        const tex = await getOrLoadGalleryTexture(url);
-        if (mesh.parent && !p.resolved) {
-          finalizeGalleryPhotoMesh(mesh, tex, planeW, planeH);
-          p.resolved = true;
-        }
-      } catch (e) {
-        console.warn('Gallery texture:', url, e);
-      } finally {
-        p.loading = false;
-        galleryStreamLoadsInFlight -= 1;
-      }
-    })();
-  }
-}
 
 function pickGalleryFocusPanels() {
   galleryFocusPinned.length = 0;
@@ -584,20 +438,6 @@ function clampWallPhotoSpansToCorridor(cy, dy, dz) {
   return { dy: dy * s, dz: dz * s };
 }
 
-function finalizeGalleryPhotoMesh(mesh, texture, planeWidth, planeHeight) {
-  const img = texture.image;
-  const iw = Math.max(1, img.naturalWidth || img.width || 1);
-  const ih = Math.max(1, img.naturalHeight || img.height || 1);
-  applyCoverUVsToPlaneGeometry(mesh.geometry, iw, ih, planeWidth, planeHeight);
-  mesh.material.dispose();
-  const base = getSharedGalleryMaterial(texture);
-  const m = base.clone();
-  m.side = THREE.DoubleSide;
-  m.polygonOffset = false;
-  mesh.material = m;
-  mesh.visible = true;
-}
-
 const lookDist = 28;
 
 /** Achromatic grid — soft, understated lines matching lifted cell tones */
@@ -730,8 +570,8 @@ function addCorridor(parent) {
 }
 
 /**
- * Procedural layout: each ring adds many staggered floor / ceiling / wall photos so the tunnel
- * reads as mostly imagery. `wx`/`dz`/`dy` on specs are ignored — size comes from image aspect.
+ * Procedural layout: each ring adds many staggered floor / ceiling / wall panels so the tunnel
+ * reads as a dense grid of quads. `wx`/`dz`/`dy` on specs are ignored — size comes from aspect.
  */
 function buildDenseGalleryLayoutSpecs() {
   const h = CORRIDOR_HEIGHT;
@@ -773,8 +613,7 @@ function buildDenseGalleryLayoutSpecs() {
 }
 
 /**
- * Textured gallery — meshes use placeholders until `updateGalleryTextureStreaming` loads
- * each JPEG when the panel is near the camera (bounded decode/GPU upload per frame).
+ * Light-gray placeholder quads in the dense layout (no image files or texture streaming).
  */
 function addPhotoGalleryPlanes(parent) {
   galleryStreamPanels.length = 0;
@@ -783,32 +622,30 @@ function addPhotoGalleryPlanes(parent) {
   const h = CORRIDOR_HEIGHT;
   const midZ = -len / 2;
   const lift = GALLERY_SURFACE_LIFT;
+  const item = PLACEHOLDER_GALLERY_ITEM;
 
-  /** Throw-away material; finalizeGalleryPhotoMesh replaces it after load. */
   function placeholderMaterial() {
     return new THREE.MeshBasicMaterial({
-      color: 0x1a1d24,
-      toneMapped: false,
+      color: 0xd8d9dc,
+      toneMapped: true,
       fog: false,
       side: THREE.DoubleSide,
     });
   }
 
-  function registerStreamPanel(mesh, url, planeW, planeH, depthSlot) {
+  function registerStreamPanel(mesh, planeW, planeH, depthSlot) {
     galleryStreamPanels.push({
       mesh,
-      url,
       planeW,
       planeH,
       depthSlot,
-      resolved: false,
-      loading: false,
+      resolved: true,
       restPos: new THREE.Vector3().copy(mesh.position),
       restQuat: new THREE.Quaternion().copy(mesh.quaternion),
     });
   }
 
-  function addFloorPanel(cx, cz, wx, dz, url) {
+  function addFloorPanel(cx, cz, wx, dz) {
     const depthSlot = galleryStreamPanels.length;
     const sep = gallerySurfaceSeparation(depthSlot);
     const geo = new THREE.PlaneGeometry(wx, dz);
@@ -822,12 +659,12 @@ function addPhotoGalleryPlanes(parent) {
     );
     mesh.position.set(cxn, -h / 2 + lift + sep, cz - midZ);
     mesh.renderOrder = 1;
-    mesh.visible = false;
+    mesh.visible = true;
     parent.add(mesh);
-    registerStreamPanel(mesh, url, wx, dz, depthSlot);
+    registerStreamPanel(mesh, wx, dz, depthSlot);
   }
 
-  function addCeilingPanel(cx, cz, wx, dz, url) {
+  function addCeilingPanel(cx, cz, wx, dz) {
     const depthSlot = galleryStreamPanels.length;
     const sep = gallerySurfaceSeparation(depthSlot);
     const geo = new THREE.PlaneGeometry(wx, dz);
@@ -841,12 +678,12 @@ function addPhotoGalleryPlanes(parent) {
     );
     mesh.position.set(cxn, h / 2 - lift + sep, cz - midZ);
     mesh.renderOrder = 1;
-    mesh.visible = false;
+    mesh.visible = true;
     parent.add(mesh);
-    registerStreamPanel(mesh, url, wx, dz, depthSlot);
+    registerStreamPanel(mesh, wx, dz, depthSlot);
   }
 
-  function addLeftWallPanel(cy, cz, dy, dz, url) {
+  function addLeftWallPanel(cy, cz, dy, dz) {
     const depthSlot = galleryStreamPanels.length;
     const sep = gallerySurfaceSeparation(depthSlot);
     const hy = dy / 2;
@@ -855,12 +692,12 @@ function addPhotoGalleryPlanes(parent) {
     mesh.rotation.y = Math.PI / 2;
     mesh.position.set(-CORRIDOR_HALF_WIDTH + lift + sep, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
-    mesh.visible = false;
+    mesh.visible = true;
     parent.add(mesh);
-    registerStreamPanel(mesh, url, dz, dy, depthSlot);
+    registerStreamPanel(mesh, dz, dy, depthSlot);
   }
 
-  function addRightWallPanel(cy, cz, dy, dz, url) {
+  function addRightWallPanel(cy, cz, dy, dz) {
     const depthSlot = galleryStreamPanels.length;
     const sep = gallerySurfaceSeparation(depthSlot);
     const hy = dy / 2;
@@ -869,36 +706,31 @@ function addPhotoGalleryPlanes(parent) {
     mesh.rotation.y = -Math.PI / 2;
     mesh.position.set(CORRIDOR_HALF_WIDTH - lift + sep, cyn - h / 2, cz - midZ);
     mesh.renderOrder = 1;
-    mesh.visible = false;
+    mesh.visible = true;
     parent.add(mesh);
-    registerStreamPanel(mesh, url, dz, dy, depthSlot);
+    registerStreamPanel(mesh, dz, dy, depthSlot);
   }
 
   const specs = buildDenseGalleryLayoutSpecs();
   specs.sort((a, b) => b.cz - a.cz);
 
-  if (!GALLERY_ITEMS.length) return;
-
-  const nItem = GALLERY_ITEMS.length;
   const n = Math.min(specs.length, GALLERY_MAX_PANELS);
 
   for (let i = 0; i < n; i += 1) {
     const s = specs[i];
-    const item = GALLERY_ITEMS[i % nItem];
-    const url = item.url;
     if (s.kind === 'floor') {
       const { wx, dz } = floorCeilingSpansFromPhotoItem(item);
-      addFloorPanel(s.cx, s.cz, wx, dz, url);
+      addFloorPanel(s.cx, s.cz, wx, dz);
     } else if (s.kind === 'ceiling') {
       const { wx, dz } = floorCeilingSpansFromPhotoItem(item);
-      addCeilingPanel(s.cx, s.cz, wx, dz, url);
+      addCeilingPanel(s.cx, s.cz, wx, dz);
     } else {
       let { dz: wdz, dy } = wallSpansFromPhotoItem(item);
       const fitted = clampWallPhotoSpansToCorridor(s.cy, dy, wdz);
       dy = fitted.dy;
       wdz = fitted.dz;
-      if (s.kind === 'left') addLeftWallPanel(s.cy, s.cz, dy, wdz, url);
-      else addRightWallPanel(s.cy, s.cz, dy, wdz, url);
+      if (s.kind === 'left') addLeftWallPanel(s.cy, s.cz, dy, wdz);
+      else addRightWallPanel(s.cy, s.cz, dy, wdz);
     }
   }
 }
@@ -913,12 +745,14 @@ async function startExperience() {
 void startExperience();
 
 function onResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const { w, h } = galleryViewSize();
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(w, h);
 }
 
 window.addEventListener('resize', onResize);
+onResize();
 
 /** Mouse Y fallback when right hand not visible: top = fast. */
 let mouseYNormalized = 0.4;
@@ -942,8 +776,13 @@ let handSmoothedProximity01 = 0.35;
 let corridorRollSmoothed = 0;
 
 function onPointerMove(event) {
-  const h = window.innerHeight || 1;
-  mouseYNormalized = THREE.MathUtils.clamp(event.clientY / h, 0, 1);
+  const r = galleryStageEl.getBoundingClientRect();
+  const h = r.height || 1;
+  mouseYNormalized = THREE.MathUtils.clamp(
+    (event.clientY - r.top) / h,
+    0,
+    1
+  );
 }
 
 window.addEventListener('pointermove', onPointerMove, { passive: true });
@@ -1075,23 +914,12 @@ calStyle.textContent = `
   transition: width 0.08s linear;
 }
 #hand-tracking-preview {
-  position: fixed;
-  top: 12px;
-  left: 12px;
-  z-index: 9000;
-  width: min(280px, 34vw);
-  aspect-ratio: 4 / 3;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
-  background: #050508;
+  display: none;
 }
 #hand-tracking-preview canvas {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: fill;
   pointer-events: none;
 }
 `;
@@ -1308,7 +1136,6 @@ async function initHandTracking() {
     console.warn('Hand tracking unavailable, using mouse for speed only:', err);
     handLandmarker = null;
     rightHandCalibrationState = 'skipped';
-    handPreviewWrap.style.display = 'none';
     calMsgEl.textContent =
       'Camera or hand tracking unavailable. Corridor roll is disabled.';
     setTimeout(hideCalibrationOverlay, 3200);
@@ -1405,7 +1232,6 @@ function animate() {
   corridorRoot.updateMatrixWorld(true);
   camera.updateMatrixWorld(true);
 
-  updateGalleryTextureStreaming(cam);
   updateGalleryFocusPop(dt, cam);
 
   renderer.render(scene, camera);

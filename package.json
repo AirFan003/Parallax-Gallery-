@@ -12,7 +12,6 @@
     "three": "^0.172.0"
   },
   "devDependencies": {
-    "image-size": "^2.0.2",
     "vite": "^6.0.3"
   }
 }
