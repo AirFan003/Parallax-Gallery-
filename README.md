@@ -4,6 +4,8 @@ A **first-person corridor** built with **[Three.js](https://threejs.org/)**—de
 
 Use it as a starting point for photo tunnels, museum walkthroughs, or WebGL experiments.
 
+**Repository:** [github.com/AirFan003/Parallax-Gallery-](https://github.com/AirFan003/Parallax-Gallery-)
+
 ---
 
 ## Features
@@ -18,7 +20,7 @@ Use it as a starting point for photo tunnels, museum walkthroughs, or WebGL expe
 
 ## Requirements
 
-- **Node.js**  
+- **Node.js** 18+ recommended  
 - A **modern desktop browser** with WebGL  
 - For hand tracking: **Webcam** access; pages must be served from **localhost** or **HTTPS** (browser security for `getUserMedia`)
 
@@ -30,7 +32,7 @@ On first load, MediaPipe loads a small **hand landmark model** from Google’s C
 
 ```bash
 git clone https://github.com/AirFan003/Parallax-Gallery-.git
-cd parallax-gallery
+cd Parallax-Gallery-
 npm install
 npm run dev
 ```
@@ -65,12 +67,12 @@ If the camera is denied or unavailable, the experience falls back to **mouse-onl
 
 ## Customization
 
-Most tuning lives in `**src/main.js`** at the top as `const` values:
+Most tuning lives in **`src/main.js`** at the top as `const` values:
 
 - **Corridor** — `CORRIDOR_HALF_WIDTH`, `CORRIDOR_HEIGHT`, `CORRIDOR_LENGTH`, `GRID_SCALE`, colors under the grid shader setup.
 - **Motion** — `FWD_SPEED_AT_TOP` / `FWD_SPEED_AT_BOTTOM`, `CAMERA_START_Z`, `EYE_HEIGHT`.
 - **Gallery layout** — `GALLERY_RING_STEP`, `GALLERY_MAX_PANELS`, `MAX_GALLERY_PHOTO_ALONG_Z`, `PLACEHOLDER_GALLERY_ITEM` (aspect ratio for placeholder planes).
-- **Hand / fist** — proximity span limits, `FIST_`* thresholds, `GALLERY_FOCUS_DISTANCE`, `GALLERY_FOCUS_HORIZONTAL_SPREAD`, `GALLERY_FOCUS_MOVEMENT_SCALE`.
+- **Hand / fist** — proximity span limits, `FIST_*` thresholds, `GALLERY_FOCUS_DISTANCE`, `GALLERY_FOCUS_HORIZONTAL_SPREAD`, `GALLERY_FOCUS_MOVEMENT_SCALE`.
 
 The hand preview canvas is **hidden** (`display: none`) but still drives inference; skeleton drawing is optional if you want a debug view.
 
@@ -82,6 +84,7 @@ The hand preview canvas is **hidden** (`display: none`) but still drives inferen
 
 ```
 ├── index.html          # Full-screen #gallery-stage shell
+├── LICENSE             # MIT
 ├── src/main.js         # Scene, corridor, gallery, hand tracking, animation loop
 ├── vite.config.js      # Vite (no custom gallery plugin in current tree)
 ├── public/             # Static files (e.g. public/gallery/ for future assets)
@@ -104,4 +107,6 @@ Issues and pull requests are welcome. If you add features, a short note in the R
 
 ## License
 
-Specify a license when you open the repository (for example **MIT**). Until then, all rights are reserved by default—add a `LICENSE` file so others know how they may use the code.
+This project is licensed under the **[MIT License](LICENSE)**.
+
+Bundled dependencies keep their own licenses (for example [three.js](https://github.com/mrdoob/three.js), [@mediapipe/tasks-vision](https://www.npmjs.com/package/@mediapipe/tasks-vision)).
