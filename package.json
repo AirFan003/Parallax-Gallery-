@@ -1,7 +1,12 @@
 {
   "name": "parallax-gallery",
-  "private": true,
+  "private": false,
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AirFan003/Parallax-Gallery-.git"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
